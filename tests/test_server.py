@@ -17,7 +17,17 @@ READ_TOOLS: set[str] = {
     "ListHighlights",
     "ListTags",
 }
-WRITE_TOOLS: set[str] = set()
+WRITE_TOOLS: set[str] = {
+    "SaveItem",
+    "UpdateItem",
+    "DeleteItem",
+    "AddTag",
+    "RemoveTag",
+    "RenameTag",
+    "DeleteTag",
+    "SetHighlightNote",
+    "DeleteHighlight",
+}
 EXPECTED_TOOLS = READ_TOOLS | WRITE_TOOLS
 
 

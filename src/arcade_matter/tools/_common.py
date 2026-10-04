@@ -58,6 +58,8 @@ MAX_LIMIT = 100
 ItemId = Annotated[
     str, "The item ID (e.g. 'itm_r9f3a'). Use ListItems or SearchLibrary to find it."
 ]
+HighlightId = Annotated[str, "The highlight ID (e.g. 'ann_x7y2z'). Use ListHighlights to find it."]
+TagId = Annotated[str, "The tag ID (e.g. 'tag_n5j2x'). Use ListTags to find it."]
 Limit = Annotated[int, f"Maximum number of results to return (1-{MAX_LIMIT})."]
 Cursor = Annotated[
     str | None,
@@ -114,5 +116,15 @@ def check_id(value: str, kind: str) -> str:
                 f"{kind.capitalize()} IDs look like '{prefix}_abc123'. Look the ID up with a "
                 "list or search tool and retry."
             ),
+        )
+    return text
+
+
+def require_text(value: str, name: str) -> str:
+    text = (value or "").strip()
+    if not text:
+        raise RetryableToolError(
+            f"{name} must not be empty.",
+            additional_prompt_content=f"Pass a non-empty {name}.",
         )
     return text

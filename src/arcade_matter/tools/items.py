@@ -2,15 +2,20 @@
 
 from enum import Enum
 from typing import Annotated
+from urllib.parse import urlparse
 
 from arcade_mcp_server import Context, tool
+from arcade_mcp_server.exceptions import RetryableToolError
 
 from arcade_matter import shaping
 from arcade_matter.client import client_from_context
 from arcade_matter.tools._common import (
+    CREATES,
     DEFAULT_LIMIT,
+    DELETES,
     READ_ONLY,
     SECRETS,
+    UPDATES,
     Cursor,
     ItemId,
     Limit,
@@ -25,6 +30,13 @@ class ItemStatus(str, Enum):
     INBOX = "inbox"
     ARCHIVE = "archive"
     ALL = "all"
+
+
+class TargetStatus(str, Enum):
+    """Statuses an item can be saved or moved to. Matter can't move items to the inbox."""
+
+    QUEUE = "queue"
+    ARCHIVE = "archive"
 
 
 class ItemOrder(str, Enum):
@@ -146,3 +158,73 @@ async def get_item_content(
     if end < len(markdown):
         result["next_offset"] = end
     return result
+
+
+@tool(requires_secrets=SECRETS, metadata=CREATES)
+async def save_item(
+    context: Context,
+    url: Annotated[str, "The http:// or https:// URL to save."],
+    status: Annotated[
+        TargetStatus, "Where to put it: 'queue' (the reading list) or 'archive'."
+    ] = TargetStatus.QUEUE,
+) -> Annotated[dict, "The saved item, with processing_status while extraction runs"]:
+    """Save a URL to the user's Matter library. Saving a URL that's already in the library
+    returns the existing item. Matter extracts the content in the background, usually within
+    a minute; check GetItem later if processing_status is 'processing'."""
+    target = url.strip()
+    parsed = urlparse(target)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise RetryableToolError(
+            f"'{url}' is not an http or https URL.",
+            additional_prompt_content="Pass a full URL starting with http:// or https://.",
+        )
+    data = await client_from_context(context).post(
+        "/items", {"url": target, "status": status.value}
+    )
+    return shaping.item(data)
+
+
+@tool(requires_secrets=SECRETS, metadata=UPDATES)
+async def update_item(
+    context: Context,
+    item_id: ItemId,
+    status: Annotated[
+        TargetStatus | None,
+        "Move the item to 'queue' or 'archive'. Items can't be moved back to the inbox.",
+    ] = None,
+    favorite: Annotated[bool | None, "True to favorite the item, false to unfavorite it."] = None,
+    progress_percent: Annotated[float | None, "Reading progress from 0 to 100 percent."] = None,
+) -> Annotated[dict, "The updated item"]:
+    """Archive or re-queue an item, favorite or unfavorite it, or set its reading progress.
+    Pass at least one change."""
+    body: dict = {}
+    if status is not None:
+        body["status"] = status.value
+    if favorite is not None:
+        body["is_favorite"] = favorite
+    if progress_percent is not None:
+        if not 0 <= progress_percent <= 100:
+            raise RetryableToolError(
+                "progress_percent must be between 0 and 100.",
+                additional_prompt_content="Pass a reading progress from 0 to 100.",
+            )
+        body["reading_progress"] = round(progress_percent / 100, 4)
+    if not body:
+        raise RetryableToolError(
+            "No changes were given.",
+            additional_prompt_content="Pass status, favorite or progress_percent.",
+        )
+    data = await client_from_context(context).patch(f"/items/{item_id}", body)
+    return shaping.item(data)
+
+
+@tool(requires_secrets=SECRETS, metadata=DELETES)
+async def delete_item(
+    context: Context,
+    item_id: ItemId,
+) -> Annotated[dict, "Confirmation of the deleted item ID"]:
+    """Permanently delete an item from the user's Matter library, along with its highlights
+    and tags. This can't be undone; to keep it out of the queue, archive it with UpdateItem
+    instead."""
+    await client_from_context(context).delete(f"/items/{item_id}")
+    return {"deleted": True, "item_id": item_id}
