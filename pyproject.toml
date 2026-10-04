@@ -1,8 +1,10 @@
 [project]
 name = "arcade_matter"
 version = "0.1.0"
-description = "MCP Server created with Arcade.dev"
+description = "Matter (read-later app) tools for agents, served as an Arcade MCP server"
 requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
 dependencies = [
     "arcade-mcp-server>=1.17.0,<2.0.0",
     "httpx>=0.28.0,<1.0.0",
@@ -30,9 +32,20 @@ packages = ["src/arcade_matter"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py312"
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "ASYNC"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["arcade_matter"]
 
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.10"
 warn_unused_configs = true
 disallow_untyped_defs = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
