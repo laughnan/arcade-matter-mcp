@@ -14,9 +14,18 @@ library, read articles and highlights, save links, and organize your queue. See
 
 ## Tools
 
+Phase 1 (read-only):
+
 | Tool | What it does |
 |---|---|
 | `Matter.GetAccount` | The connected Matter account and its API rate limits |
+| `Matter.ListItems` | Items in the queue, inbox or archive, filtered by favorite, tag, type or date |
+| `Matter.GetItem` | One item's metadata |
+| `Matter.GetItemContent` | An item's full text as Markdown, in bounded chunks |
+| `Matter.SearchLibrary` | Full-text search with `"phrase"`, `-term`, `by:`, `site:` and `title:` |
+| `Matter.ListHighlights` | Highlights and notes on one item |
+| `Matter.ListTags` | Tags and how many items each is on |
+| `Matter.ListReadingSessions` | Reading sessions with start time and duration |
 
 The rest of the catalog lands in phases (see [docs/SPEC.md](docs/SPEC.md#tool-catalog)).
 Every tool is tagged read-only or write (and delete tools as destructive), so a gateway can

@@ -54,6 +54,9 @@ DELETES = _write(Operation.DELETE, idempotent=True, destructive=True)
 DEFAULT_LIMIT = 25
 MAX_LIMIT = 100
 
+ItemId = Annotated[
+    str, "The item ID (e.g. 'itm_r9f3a'). Use ListItems or SearchLibrary to find it."
+]
 Limit = Annotated[int, f"Maximum number of results to return (1-{MAX_LIMIT})."]
 Cursor = Annotated[
     str | None,
