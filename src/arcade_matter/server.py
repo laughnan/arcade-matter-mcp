@@ -15,7 +15,14 @@ if str(_SRC) not in sys.path:
 from arcade_mcp_server import MCPApp  # noqa: E402
 from arcade_mcp_server.mcp_app import TransportType  # noqa: E402
 
-from arcade_matter.tools import account, highlights, items, search, tags  # noqa: E402
+from arcade_matter.tools import (  # noqa: E402
+    account,
+    highlights,
+    insights,
+    items,
+    search,
+    tags,
+)
 
 INSTRUCTIONS = """\
 Tools for reading and organizing the user's Matter library. Matter is a read-later app
@@ -26,6 +33,9 @@ for articles, newsletters, podcasts, PDFs and tweets.
 - Matter's API calls highlights "annotations". Highlights can be listed, annotated with a
   note, or deleted, but not created.
 - Tools take IDs. Use the list and search tools to look up item, highlight and tag IDs.
+- For common questions, start with the summary tools: GetItemWithHighlights ("what did I
+  highlight in this?"), ListRecentHighlights ("what did I highlight this week?") and
+  SummarizeReadingTime ("how much have I read?").
 - Matter's rate limits are tight (for example 20 full-text fetches per minute), so prefer
   item summaries and excerpts over fetching full content.
 - Before any write (saving, changing or deleting), confirm the details with the user
@@ -33,7 +43,7 @@ for articles, newsletters, podcasts, PDFs and tweets.
 """
 
 # Tool modules are added here as each phase of docs/SPEC.md lands.
-TOOL_MODULES: tuple[ModuleType, ...] = (account, items, search, highlights, tags)
+TOOL_MODULES: tuple[ModuleType, ...] = (account, items, search, highlights, tags, insights)
 
 app = MCPApp(name="matter", version="0.1.0", instructions=INSTRUCTIONS, log_level="INFO")
 
