@@ -1,94 +1,50 @@
 #!/usr/bin/env python3
-"""arcade_matter MCP server"""
+"""Matter MCP server, hosted on Arcade Cloud with `arcade deploy`."""
 
 import sys
-from typing import Annotated
+from pathlib import Path
+from types import ModuleType
+from typing import cast
 
-import httpx
-from arcade_mcp_server import Context, MCPApp
-from arcade_mcp_server.auth import GitHub
-from arcade_mcp_server.metadata import (
-    Behavior,
-    Classification,
-    Operation,
-    ServiceDomain,
-    ToolMetadata,
-)
+# When this file is run directly (as `arcade deploy` and `uv run` do), make the
+# `arcade_matter` package importable even if the project isn't installed.
+_SRC = Path(__file__).resolve().parents[1]
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
 
-app = MCPApp(name="arcade_matter", version="1.0.0", log_level="DEBUG")
+from arcade_mcp_server import MCPApp  # noqa: E402
+from arcade_mcp_server.mcp_app import TransportType  # noqa: E402
 
+from arcade_matter.tools import account  # noqa: E402
 
-@app.tool
-def greet(name: Annotated[str, "The name of the person to greet"]) -> str:
-    """Greet a person by name."""
-    return f"Hello, {name}!"
+INSTRUCTIONS = """\
+Tools for reading and organizing the user's Matter library. Matter is a read-later app
+for articles, newsletters, podcasts, PDFs and tweets.
 
+- Items have a status: "queue" (the reading list), "inbox" (feeds and newsletters) or
+  "archive" (finished). Items can't be moved back to the inbox.
+- Matter's API calls highlights "annotations". Highlights can be listed, annotated with a
+  note, or deleted, but not created.
+- Tools take IDs. Use the list and search tools to look up item, highlight and tag IDs.
+- Matter's rate limits are tight (for example 20 full-text fetches per minute), so prefer
+  item summaries and excerpts over fetching full content.
+- Before any write (saving, changing or deleting), confirm the details with the user
+  unless they were explicit.
+"""
 
-# To use this tool locally, you need to either set the secret in the .env file or as an environment variable
-@app.tool(requires_secrets=["MY_SECRET_KEY"])
-def whisper_secret(context: Context) -> Annotated[str, "The last 4 characters of the secret"]:
-    """Reveal the last 4 characters of a secret"""
-    # Secrets are injected into the context at runtime.
-    # LLMs and MCP clients cannot see or access your secrets
-    # You can define secrets in a .env file.
-    try:
-        secret = context.get_secret("MY_SECRET_KEY")
-    except Exception as e:
-        return str(e)
+# Tool modules are added here as each phase of docs/SPEC.md lands.
+TOOL_MODULES: tuple[ModuleType, ...] = (account,)
 
-    return "The last 4 characters of the secret are: " + secret[-4:]
+app = MCPApp(name="matter", version="0.1.0", instructions=INSTRUCTIONS, log_level="INFO")
 
-
-# To use this tool locally, you need to install the Arcade CLI (uv tool install arcade-mcp)
-# and then run 'arcade login' to authenticate.
-@app.tool(
-    requires_auth=GitHub(),
-    metadata=ToolMetadata(
-        classification=Classification(
-            service_domains=[ServiceDomain.SOURCE_CODE],
-        ),
-        behavior=Behavior(
-            operations=[Operation.UPDATE],
-            read_only=False,
-            destructive=False,
-            idempotent=True,
-            open_world=True,
-        ),
-    ),
-)
-async def star_repo(
-    context: Context,
-    owner: Annotated[str, "GitHub owner (user or org). E.g. 'ArcadeAI'"],
-    repo: Annotated[str, "GitHub repository name. E.g. 'arcade-mcp'"],
-) -> Annotated[str, "Confirmation that the repository was starred"]:
-    """Star a public GitHub repository on behalf of the authenticated user."""
-    # OAuth token is injected into the context at runtime.
-    # LLMs and MCP clients cannot see or access your OAuth tokens.
-    oauth_token = context.get_auth_token_or_empty()
-    headers = {
-        "Authorization": f"Bearer {oauth_token}",
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-        "User-Agent": "arcade_matter-mcp-server",
-    }
-    url = f"https://api.github.com/user/starred/{owner}/{repo}"
-
-    async with httpx.AsyncClient() as client:
-        response = await client.put(url, headers=headers)
-        response.raise_for_status()
-
-    return f"Starred {owner}/{repo}."
+for module in TOOL_MODULES:
+    for obj in vars(module).values():
+        if callable(obj) and hasattr(obj, "__tool_name__"):
+            app.add_tool(obj)
 
 
-# Run with specific transport
 if __name__ == "__main__":
-    # Get transport from command line argument, default to "stdio"
-    # - "stdio" (default): Standard I/O for Claude Desktop, CLI tools, etc.
-    #   Supports tools that require_auth or require_secrets out-of-the-box
-    # - "http": HTTPS streaming for Cursor, VS Code, etc.
-    #   Does not support tools that require_auth or require_secrets unless the server is deployed
-    #   using 'arcade deploy' or added in the Arcade Developer Dashboard with 'Arcade' server type
-    transport = sys.argv[1] if len(sys.argv) > 1 else "stdio"
-
-    # Run the server
+    # "stdio" (default) for local MCP clients; "http" for streamable HTTP.
+    # Arcade Cloud sets its own transport, host and port when deployed.
+    transport = cast(TransportType, sys.argv[1] if len(sys.argv) > 1 else "stdio")
     app.run(transport=transport, host="127.0.0.1", port=8000)
