@@ -1,5 +1,5 @@
 import pytest
-from arcade_mcp_server.exceptions import RetryableToolError
+from arcade_mcp_server.exceptions import RetryableToolError, ToolExecutionError
 from conftest import make_highlight, make_item, make_tag
 
 from arcade_matter.tools.highlights import delete_highlight, set_highlight_note
@@ -126,10 +126,10 @@ async def test_rename_tag_conflict_is_retryable(matter, context):
         await rename_tag(context, "tag_ai", "essays")
 
 
-@pytest.mark.parametrize("tool", [add_tag, rename_tag])
-async def test_tag_names_must_not_be_empty(matter, context, tool):
+@pytest.mark.parametrize(("tool", "target"), [(add_tag, "itm_1"), (rename_tag, "tag_ai")])
+async def test_tag_names_must_not_be_empty(matter, context, tool, target):
     with pytest.raises(RetryableToolError, match="name must not be empty"):
-        await tool(context, "itm_1", "   ")
+        await tool(context, target, "   ")
 
     assert matter.requests == []
 
@@ -181,8 +181,88 @@ async def test_deletes(matter, context, tool, path, target, expected):
     assert result == expected
 
 
-async def test_delete_missing_item_is_retryable(matter, context):
-    matter.error("DELETE", "/items/itm_gone", 404, "not_found", "Item not found")
+@pytest.mark.parametrize(
+    ("tool", "path", "target", "key"),
+    [
+        (delete_item, "/items/itm_gone", "itm_gone", "item_id"),
+        (delete_highlight, "/annotations/ann_gone", "ann_gone", "highlight_id"),
+        (delete_tag, "/tags/tag_gone", "tag_gone", "tag_id"),
+    ],
+)
+async def test_delete_of_missing_target_is_not_an_error(matter, context, tool, path, target, key):
+    matter.error("DELETE", path, 404, "not_found", "Not found")
 
-    with pytest.raises(RetryableToolError, match="could not find"):
-        await delete_item(context, "itm_gone")
+    result = await tool(context, target)
+
+    assert result["deleted"] is False
+    assert result["not_found"] is True
+    assert result[key] == target
+
+
+async def test_remove_missing_tag_is_not_an_error(matter, context):
+    matter.error("DELETE", "/items/itm_1/tags/tag_ai", 404, "not_found", "Not found")
+
+    result = await remove_tag(context, "itm_1", "tag_ai")
+
+    assert result["removed"] is False
+    assert result["not_found"] is True
+
+
+async def test_delete_still_raises_other_errors(matter, context):
+    matter.error("DELETE", "/items/itm_1", 403, "forbidden", "Pro required")
+
+    with pytest.raises(ToolExecutionError, match="Matter Pro"):
+        await delete_item(context, "itm_1")
+
+
+# --- SaveItem on a URL that's already saved ---
+
+
+async def test_save_item_reports_existing_item(matter, context):
+    matter.add("POST", "/items", make_item(status="queue"), status=200)
+
+    result = await save_item(context, "https://example.com/attention")
+
+    assert result["already_in_library"] is True
+    assert "note" not in result
+
+
+async def test_save_item_existing_with_different_status_points_to_update(matter, context):
+    matter.add("POST", "/items", make_item(status="queue"), status=200)
+
+    result = await save_item(context, "https://example.com/attention", TargetStatus.ARCHIVE)
+
+    assert result["already_in_library"] is True
+    assert "UpdateItem" in result["note"]
+
+
+async def test_save_item_new_is_not_flagged(matter, context):
+    matter.add("POST", "/items", make_item(), status=201)
+
+    result = await save_item(context, "https://example.com/attention")
+
+    assert "already_in_library" not in result
+
+
+# --- ID validation on writes ---
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda ctx: delete_item(ctx, "itm_1/tags/tag_ai"),
+        lambda ctx: delete_item(ctx, "ann_1"),
+        lambda ctx: delete_highlight(ctx, "ann_1/../../items/itm_2"),
+        lambda ctx: delete_tag(ctx, "itm_1"),
+        lambda ctx: update_item(ctx, "itm_1?status=archive", favorite=True),
+        lambda ctx: add_tag(ctx, "tag_ai", "essays"),
+        lambda ctx: remove_tag(ctx, "itm_1", "tag_ai/x"),
+        lambda ctx: rename_tag(ctx, "tag ai", "essays"),
+        lambda ctx: set_highlight_note(ctx, "itm_1", "note"),
+    ],
+)
+async def test_writes_reject_malformed_ids(matter, context, call):
+    with pytest.raises(RetryableToolError, match="not a valid Matter"):
+        await call(context)
+
+    assert matter.requests == []

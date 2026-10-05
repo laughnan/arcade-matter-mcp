@@ -128,3 +128,14 @@ def require_text(value: str, name: str) -> str:
             additional_prompt_content=f"Pass a non-empty {name}.",
         )
     return text
+
+
+def not_found(key: str, value: str) -> dict[str, object]:
+    """Result for a delete whose target doesn't exist. Deletes are marked idempotent, so a
+    repeat of a delete that already succeeded is reported, not raised."""
+    return {
+        "deleted": False,
+        "not_found": True,
+        key: value,
+        "note": "Nothing with this ID exists; it may already have been deleted.",
+    }

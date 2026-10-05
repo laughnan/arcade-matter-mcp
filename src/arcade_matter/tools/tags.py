@@ -16,7 +16,9 @@ from arcade_matter.tools._common import (
     ItemId,
     Limit,
     TagId,
+    check_id,
     clamp_limit,
+    not_found,
     require_text,
 )
 
@@ -41,6 +43,7 @@ async def add_tag(
     ],
 ) -> Annotated[dict, "The tag that is now on the item"]:
     """Tag an item by tag name, creating the tag if it doesn't exist yet."""
+    item_id = check_id(item_id, "item")
     data = await client_from_context(context).post(
         f"/items/{item_id}/tags", {"name": require_text(name, "name")}
     )
@@ -54,7 +57,17 @@ async def remove_tag(
     tag_id: TagId,
 ) -> Annotated[dict, "Confirmation that the tag was removed from the item"]:
     """Remove a tag from one item. The tag itself and its other items are kept."""
-    await client_from_context(context).delete(f"/items/{item_id}/tags/{tag_id}")
+    item_id = check_id(item_id, "item")
+    tag_id = check_id(tag_id, "tag")
+    path = f"/items/{item_id}/tags/{tag_id}"
+    if await client_from_context(context).delete(path, missing_ok=True) is None:
+        return {
+            "removed": False,
+            "not_found": True,
+            "item_id": item_id,
+            "tag_id": tag_id,
+            "note": "The item doesn't exist or doesn't have this tag; nothing was changed.",
+        }
     return {"removed": True, "item_id": item_id, "tag_id": tag_id}
 
 
@@ -65,6 +78,7 @@ async def rename_tag(
     name: Annotated[str, "The new tag name. It must not already be used by another tag."],
 ) -> Annotated[dict, "The renamed tag"]:
     """Rename a tag everywhere it's used."""
+    tag_id = check_id(tag_id, "tag")
     data = await client_from_context(context).patch(
         f"/tags/{tag_id}", {"name": require_text(name, "name")}
     )
@@ -78,5 +92,7 @@ async def delete_tag(
 ) -> Annotated[dict, "Confirmation of the deleted tag ID"]:
     """Permanently delete a tag and remove it from every item. The items are kept. This can't
     be undone; to untag a single item, use RemoveTag instead."""
-    await client_from_context(context).delete(f"/tags/{tag_id}")
+    tag_id = check_id(tag_id, "tag")
+    if await client_from_context(context).delete(f"/tags/{tag_id}", missing_ok=True) is None:
+        return not_found("tag_id", tag_id)
     return {"deleted": True, "tag_id": tag_id}

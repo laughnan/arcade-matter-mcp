@@ -18,6 +18,7 @@ from arcade_matter.tools._common import (
     Limit,
     check_id,
     clamp_limit,
+    not_found,
 )
 
 
@@ -43,6 +44,7 @@ async def set_highlight_note(
     note: Annotated[str, "The note text. Pass an empty string to remove the note."],
 ) -> Annotated[dict, "The updated highlight"]:
     """Add, replace or remove the note on a highlight. Matter's API can't create highlights."""
+    highlight_id = check_id(highlight_id, "highlight")
     data = await client_from_context(context).patch(
         f"/annotations/{highlight_id}", {"note": note.strip() or None}
     )
@@ -55,5 +57,8 @@ async def delete_highlight(
     highlight_id: HighlightId,
 ) -> Annotated[dict, "Confirmation of the deleted highlight ID"]:
     """Permanently delete a highlight and its note. This can't be undone."""
-    await client_from_context(context).delete(f"/annotations/{highlight_id}")
+    highlight_id = check_id(highlight_id, "highlight")
+    path = f"/annotations/{highlight_id}"
+    if await client_from_context(context).delete(path, missing_ok=True) is None:
+        return not_found("highlight_id", highlight_id)
     return {"deleted": True, "highlight_id": highlight_id}

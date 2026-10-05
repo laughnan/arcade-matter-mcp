@@ -21,6 +21,7 @@ from arcade_matter.tools._common import (
     Limit,
     check_id,
     clamp_limit,
+    not_found,
     validate_timestamp,
 )
 
@@ -168,9 +169,10 @@ async def save_item(
         TargetStatus, "Where to put it: 'queue' (the reading list) or 'archive'."
     ] = TargetStatus.QUEUE,
 ) -> Annotated[dict, "The saved item, with processing_status while extraction runs"]:
-    """Save a URL to the user's Matter library. Saving a URL that's already in the library
-    returns the existing item. Matter extracts the content in the background, usually within
-    a minute; check GetItem later if processing_status is 'processing'."""
+    """Save a URL to the user's Matter library. Matter extracts the content in the
+    background, usually within a minute; check GetItem later if processing_status is
+    'processing'. If the URL is already saved, the existing item is returned unchanged with
+    already_in_library: true; use UpdateItem to move it."""
     target = url.strip()
     parsed = urlparse(target)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
@@ -178,10 +180,19 @@ async def save_item(
             f"'{url}' is not an http or https URL.",
             additional_prompt_content="Pass a full URL starting with http:// or https://.",
         )
-    data = await client_from_context(context).post(
-        "/items", {"url": target, "status": status.value}
-    )
-    return shaping.item(data)
+    client = client_from_context(context)
+    data = await client.post("/items", {"url": target, "status": status.value})
+    result = shaping.item(data)
+    # Matter answers 201 for a new save and 200 with the existing item, which it doesn't move.
+    if client.last_status == 200:
+        result["already_in_library"] = True
+        current = data.get("status")
+        if current and current != status.value:
+            result["note"] = (
+                f"This URL was already saved with status '{current}' and was not moved. "
+                f"Use UpdateItem with status '{status.value}' to move it."
+            )
+    return result
 
 
 @tool(requires_secrets=SECRETS, metadata=UPDATES)
@@ -197,6 +208,7 @@ async def update_item(
 ) -> Annotated[dict, "The updated item"]:
     """Archive or re-queue an item, favorite or unfavorite it, or set its reading progress.
     Pass at least one change."""
+    item_id = check_id(item_id, "item")
     body: dict = {}
     if status is not None:
         body["status"] = status.value
@@ -223,8 +235,11 @@ async def delete_item(
     context: Context,
     item_id: ItemId,
 ) -> Annotated[dict, "Confirmation of the deleted item ID"]:
-    """Permanently delete an item from the user's Matter library, along with its highlights
-    and tags. This can't be undone; to keep it out of the queue, archive it with UpdateItem
-    instead."""
-    await client_from_context(context).delete(f"/items/{item_id}")
+    """Permanently delete an item from the user's Matter library, along with its highlights.
+    Its tags are only removed from this item; the tags themselves are kept (use DeleteTag to
+    delete a tag). This can't be undone; to keep it out of the queue, archive it with
+    UpdateItem instead."""
+    item_id = check_id(item_id, "item")
+    if await client_from_context(context).delete(f"/items/{item_id}", missing_ok=True) is None:
+        return not_found("item_id", item_id)
     return {"deleted": True, "item_id": item_id}
