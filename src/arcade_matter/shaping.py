@@ -79,9 +79,11 @@ def highlight(raw: Raw) -> Raw:
 
 
 def reading_session(raw: Raw) -> Raw:
+    # Matter's ``date`` is when one reading period started, not a calendar day.
     return compact(
         {
-            "date": raw.get("date"),
+            "id": raw.get("id"),
+            "started_at": raw.get("date"),
             "seconds_read": raw.get("seconds_read"),
         }
     )

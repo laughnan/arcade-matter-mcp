@@ -5,6 +5,7 @@ Non-2xx responses are translated into Arcade errors with messages a model can ac
 """
 
 import asyncio
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -34,6 +35,10 @@ class MatterClient:
             "Accept": "application/json",
             "User-Agent": "arcade-matter-mcp",
         }
+        # Status code and headers of the most recent response. Tools read these for things
+        # the body doesn't carry: created vs existing (201/200) and rate-limit headroom.
+        self.last_status: int | None = None
+        self.last_headers: httpx.Headers = httpx.Headers()
 
     async def request(
         self,
@@ -61,12 +66,43 @@ class MatterClient:
                 if wait_ms <= MAX_INLINE_RETRY_SECONDS * 1000:
                     await asyncio.sleep(wait_ms / 1000)
                     response = await client.request(method, path, params=query, json=json)
+        self.last_status = response.status_code
+        self.last_headers = response.headers
         if response.is_error:
             _raise_for_error(response)
         if response.status_code == 204 or not response.content:
             return {}
-        body = response.json()
+        try:
+            body = response.json()
+        except ValueError:
+            request = response.request
+            raise UpstreamError(
+                f"Matter returned an unreadable response ({response.status_code}).",
+                developer_message=(
+                    f"Matter {request.method} {request.url.path} -> {response.status_code} "
+                    "with a non-JSON body"
+                ),
+                status_code=response.status_code,
+            ) from None
         return body if isinstance(body, dict) else {}
+
+    def rate_limit_status(self) -> dict[str, Any] | None:
+        """The rate-limit bucket the last request counted against, from its headers."""
+        headers = self.last_headers
+        if "X-RateLimit-Remaining" not in headers:
+            return None
+        status: dict[str, Any] = {}
+        for key, header in (("limit", "X-RateLimit-Limit"), ("remaining", "X-RateLimit-Remaining")):
+            try:
+                status[key] = int(headers[header])
+            except (KeyError, ValueError):
+                continue
+        try:
+            reset = datetime.fromtimestamp(int(headers["X-RateLimit-Reset"]), timezone.utc)
+            status["resets_at"] = reset.strftime("%Y-%m-%dT%H:%M:%SZ")
+        except (KeyError, ValueError, OverflowError, OSError):
+            pass
+        return status or None
 
     async def get(self, path: str, **params: Any) -> dict[str, Any]:
         return await self.request("GET", path, params=params)

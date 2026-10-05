@@ -85,3 +85,16 @@ def test_page_includes_cursor_only_when_more():
     assert more["next_cursor"] == "abc"
     assert len(more["tags"]) == 1
     assert "next_cursor" not in last
+
+
+def test_reading_session_keeps_id_and_start_time():
+    shaped = shaping.reading_session(
+        {
+            "object": "reading_session",
+            "id": "rs_1",
+            "date": "2026-04-09T14:23:00Z",
+            "seconds_read": 180,
+        }
+    )
+
+    assert shaped == {"id": "rs_1", "started_at": "2026-04-09T14:23:00Z", "seconds_read": 180}

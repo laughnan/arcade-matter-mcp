@@ -1,6 +1,6 @@
 """Shared secret, metadata and parameter helpers for Matter tools."""
 
-from datetime import date, datetime
+from datetime import date, datetime, time, timezone
 from typing import Annotated
 
 from arcade_mcp_server.exceptions import RetryableToolError
@@ -66,15 +66,20 @@ def clamp_limit(limit: int) -> int:
 
 
 def validate_timestamp(value: str | None, name: str) -> str | None:
-    """Accept an ISO date or datetime and return it in ISO 8601 form."""
+    """Accept an ISO date or datetime and return a UTC ``YYYY-MM-DDTHH:MM:SSZ`` timestamp.
+
+    Matter's timestamp filters are ``date-time`` values, so a bare date becomes midnight UTC
+    and an offset is converted to UTC. A datetime without an offset is taken as UTC.
+    """
     if value is None:
         return None
     text = value.strip()
     try:
         if len(text) == 10:
-            return date.fromisoformat(text).isoformat()
-        # Python < 3.11 doesn't parse a trailing "Z".
-        return datetime.fromisoformat(text.replace("Z", "+00:00")).isoformat()
+            parsed = datetime.combine(date.fromisoformat(text), time.min, timezone.utc)
+        else:
+            # Python < 3.11 doesn't parse a trailing "Z".
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
     except ValueError:
         raise RetryableToolError(
             f"Invalid {name} '{value}'.",
@@ -82,3 +87,6 @@ def validate_timestamp(value: str | None, name: str) -> str | None:
                 f"Use an ISO date (YYYY-MM-DD) or datetime (YYYY-MM-DDTHH:MM:SSZ) for {name}."
             ),
         ) from None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

@@ -163,3 +163,30 @@ async def test_html_error_body(monkeypatch):
 
     with pytest.raises(UpstreamError, match=r"\(502\)"):
         await MatterClient("t").get("/me")
+
+
+async def test_records_status_and_headers(matter):
+    matter.add(
+        "POST",
+        "/items",
+        {"object": "item", "id": "itm_1"},
+        status=201,
+        headers={"X-RateLimit-Remaining": "9"},
+    )
+
+    client = MatterClient("t")
+    await client.post("/items", {"url": "https://example.com"})
+
+    assert client.last_status == 201
+    assert client.rate_limit_status() == {"remaining": 9}
+
+
+async def test_non_json_success_body_is_upstream_error(monkeypatch):
+    monkeypatch.setattr(
+        client_module,
+        "TRANSPORT",
+        httpx.MockTransport(lambda request: httpx.Response(200, text="<html>Login</html>")),
+    )
+
+    with pytest.raises(UpstreamError, match="unreadable response"):
+        await MatterClient("t").get("/me")
