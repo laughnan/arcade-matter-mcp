@@ -6,10 +6,12 @@ requests. They don't call Matter. Run them with an LLM API key:
     ANTHROPIC_API_KEY=... uv run arcade evals evals/ -p anthropic
 """
 
+from datetime import timedelta
 from pathlib import Path
 
 from arcade_evals import (
     BinaryCritic,
+    DatetimeCritic,
     EvalRubric,
     EvalSuite,
     ExpectedMCPToolCall,
@@ -18,6 +20,10 @@ from arcade_evals import (
 )
 
 SERVER = Path(__file__).resolve().parents[1] / "src" / "arcade_matter" / "server.py"
+
+# Dates can come back as "2026-09-27" or "2026-09-27T00:00:00Z" (or end-of-day for an
+# inclusive end date); both are correct, so date arguments get a one-day tolerance.
+DATE_TOLERANCE = {"tolerance": timedelta(days=1), "max_difference": timedelta(days=2)}
 
 SYSTEM_MESSAGE = (
     "You help the user with their Matter read-later library. Today is 2026-10-04 "
@@ -145,11 +151,13 @@ async def matter_eval_suite() -> EvalSuite:
     )
     suite.add_case(
         name="Highlights this week",
-        user_message="What have I highlighted in the last week?",
+        # Names the date so the case doesn't depend on whether the model passes `since`
+        # or relies on the tool's 7-day default (which would be scored as missing).
+        user_message="What have I highlighted since last Sunday, September 27?",
         expected_tool_calls=[
             ExpectedMCPToolCall("Matter_ListRecentHighlights", {"since": "2026-09-27"})
         ],
-        critics=[BinaryCritic(critic_field="since", weight=1.0)],
+        critics=[DatetimeCritic(critic_field="since", weight=1.0, **DATE_TOLERANCE)],
     )
     suite.add_case(
         name="Reading time last month",
@@ -160,8 +168,8 @@ async def matter_eval_suite() -> EvalSuite:
             )
         ],
         critics=[
-            BinaryCritic(critic_field="since", weight=0.5),
-            BinaryCritic(critic_field="until", weight=0.5),
+            DatetimeCritic(critic_field="since", weight=0.5, **DATE_TOLERANCE),
+            DatetimeCritic(critic_field="until", weight=0.5, **DATE_TOLERANCE),
         ],
     )
 

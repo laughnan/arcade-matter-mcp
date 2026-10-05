@@ -14,13 +14,23 @@ from arcade_mcp_server.exceptions import RetryableToolError
 
 from arcade_matter import shaping
 from arcade_matter.client import client_from_context
-from arcade_matter.tools._common import MAX_LIMIT, READ_ONLY, SECRETS, ItemId, validate_timestamp
+from arcade_matter.tools._common import (
+    MAX_LIMIT,
+    READ_ONLY,
+    SECRETS,
+    ItemId,
+    check_id,
+    validate_timestamp,
+)
 
 DEFAULT_RECENT_DAYS = 7
 DEFAULT_RECENT_ITEMS = 10
 MAX_RECENT_ITEMS = 20
 DEFAULT_READING_DAYS = 30
+# Pages of sessions counted inside the period, plus pages newer than `until` that are
+# skipped first (Matter returns sessions newest first and has no `until` filter).
 MAX_SESSION_PAGES = 4
+MAX_SKIPPED_PAGES = 6
 # Beyond this many days, the per-day breakdown is left out to keep responses small.
 MAX_DAILY_ROWS = 62
 
@@ -30,6 +40,11 @@ _ITEM_SUMMARY_KEYS = ("id", "title", "url", "author", "site", "status")
 def _now() -> datetime:
     """The current time in UTC. Patched in tests."""
     return datetime.now(timezone.utc)
+
+
+def _utc(moment: datetime) -> str:
+    """Format a datetime the way Matter's examples do: UTC with a trailing Z."""
+    return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _parse_instant(value: str | None) -> datetime | None:
@@ -61,6 +76,7 @@ async def get_item_with_highlights(
 ) -> Annotated[dict, "The item's metadata and its highlights with notes"]:
     """Get an item together with every highlight and note on it (up to 100), in two
     requests. Use this to answer "what did I highlight in this article?"."""
+    item_id = check_id(item_id, "item")
     client = client_from_context(context)
     item = await client.get(f"/items/{item_id}")
     data = await client.get(f"/items/{item_id}/annotations", limit=MAX_LIMIT)
@@ -89,7 +105,8 @@ async def list_recent_highlights(
 ) -> Annotated[dict, "Recent highlights grouped by item, most recently updated item first"]:
     """List the highlights the user made recently, grouped by item. Use this to answer
     "what did I highlight this week?". Makes one request for recently updated items and one
-    per item checked (at most 21 requests)."""
+    per item checked (at most 21 requests). Reading progress and tag changes also count as
+    updates, so when more_items is set, some highlighted items may not have been checked."""
     start = _since(since, DEFAULT_RECENT_DAYS)
     count = max(1, min(int(max_items), MAX_RECENT_ITEMS))
     client = client_from_context(context)
@@ -97,7 +114,7 @@ async def list_recent_highlights(
     data = await client.get(
         "/items",
         status="all",
-        updated_since=start.isoformat(),
+        updated_since=_utc(start),
         order="updated",
         limit=count,
     )
@@ -116,10 +133,14 @@ async def list_recent_highlights(
             >= start
         ]
         if recent:
-            groups.append({"item": _item_summary(raw), "highlights": recent})
+            group: dict[str, Any] = {"item": _item_summary(raw), "highlights": recent}
+            if page.get("has_more"):
+                # Matter doesn't document annotation order, so later pages may hold more.
+                group["more_highlights"] = True
+            groups.append(group)
 
     result: dict[str, Any] = {
-        "since": start.isoformat(),
+        "since": _utc(start),
         "items_checked": len(items),
         "items": groups,
     }
@@ -163,8 +184,9 @@ async def summarize_reading_time(
     ] = "UTC",
 ) -> Annotated[dict, "Reading time totals, averages, streaks and a per-day breakdown"]:
     """Summarize how much the user read over a period: total and average minutes, days read,
-    the longest and current streaks, and the busiest day. Use this to answer "how much have
-    I read this month?". Makes up to 4 requests."""
+    the longest streak, the busiest day, and the current streak when the period reaches
+    yesterday or today. Use this to answer "how much have I read this month?" or "how much
+    did I read in September?". Makes up to 10 requests."""
     try:
         zone = ZoneInfo(timezone_name)
     except (ZoneInfoNotFoundError, ValueError):
@@ -188,34 +210,41 @@ async def summarize_reading_time(
     minutes_by_day: dict[date, float] = defaultdict(float)
     sessions = 0
     cursor = None
+    counted_pages = skipped_pages = 0
     truncated = False
-    for page_number in range(MAX_SESSION_PAGES):
+    while True:
         data = await client.get(
             "/reading_sessions",
-            since=start_instant.astimezone(timezone.utc).isoformat(),
+            since=_utc(start_instant),
             limit=MAX_LIMIT,
             cursor=cursor,
         )
+        reached_period = False
         for session in data.get("results") or []:
             started = _parse_instant(session.get("date"))
             if started is None:
                 continue
             day = started.astimezone(zone).date()
-            if start_day <= day <= end_day:
+            if day > end_day:
+                continue
+            reached_period = True
+            if day >= start_day:
                 minutes_by_day[day] += (session.get("seconds_read") or 0) / 60
                 sessions += 1
+        if reached_period:
+            counted_pages += 1
+        else:
+            skipped_pages += 1
         cursor = data.get("next_cursor")
         if not (data.get("has_more") and cursor):
             break
-        if page_number == MAX_SESSION_PAGES - 1:
+        if counted_pages >= MAX_SESSION_PAGES or skipped_pages >= MAX_SKIPPED_PAGES:
             truncated = True
+            break
 
     days_in_range = (end_day - start_day).days + 1
     total = sum(minutes_by_day.values())
     longest, last_run = _streaks(list(minutes_by_day))
-    current = (
-        len(last_run) if last_run and last_run[-1] >= min(end_day, today) - timedelta(days=1) else 0
-    )
 
     result: dict[str, Any] = {
         "since": start_day.isoformat(),
@@ -230,8 +259,11 @@ async def summarize_reading_time(
             round(total / len(minutes_by_day), 1) if minutes_by_day else 0
         ),
         "longest_streak_days": longest,
-        "current_streak_days": current,
     }
+    # A "current" streak only makes sense when the period runs up to now.
+    if end_day >= today - timedelta(days=1):
+        ongoing = bool(last_run) and last_run[-1] >= today - timedelta(days=1)
+        result["current_streak_days"] = len(last_run) if ongoing else 0
     if minutes_by_day:
         busiest = max(minutes_by_day, key=lambda d: minutes_by_day[d])
         result["busiest_day"] = {
@@ -245,14 +277,16 @@ async def summarize_reading_time(
     if truncated:
         result["truncated"] = True
         result["note"] = (
-            f"Only the most recent {MAX_SESSION_PAGES * MAX_LIMIT} sessions were counted; use "
-            "a later since date for exact totals."
+            "Matter had more sessions than this tool reads in one call, so these totals cover "
+            "only part of the period (the most recent part). Ask about a shorter period for "
+            "exact totals."
         )
     return result
 
 
 def _date_param(value: str | None, name: str) -> date | None:
-    validated = validate_timestamp(value, name)
-    if validated is None:
+    if validate_timestamp(value, name) is None:
         return None
-    return date.fromisoformat(validated[:10])
+    assert value is not None
+    # Use the calendar date as written, not converted to UTC.
+    return date.fromisoformat(value.strip()[:10])

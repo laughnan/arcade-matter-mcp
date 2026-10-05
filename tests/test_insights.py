@@ -104,7 +104,7 @@ async def test_list_recent_highlights_groups_and_filters(matter, context):
     items_request = matter.requests[0]
     assert dict(items_request.url.params) == {
         "status": "all",
-        "updated_since": "2026-09-27T00:00:00+00:00",
+        "updated_since": "2026-09-27T00:00:00Z",
         "order": "updated",
         "limit": "10",
     }
@@ -128,7 +128,7 @@ async def test_list_recent_highlights_defaults_and_caps(matter, context):
     result = await list_recent_highlights(context, max_items=500)
 
     params = matter.requests[0].url.params
-    assert params["updated_since"] == "2026-09-27T18:00:00+00:00"
+    assert params["updated_since"] == "2026-09-27T18:00:00Z"
     assert params["limit"] == "20"
     assert result["more_items"] is True
     assert "max_items" in result["note"]
@@ -154,7 +154,7 @@ async def test_summarize_reading_time(matter, context):
 
     result = await summarize_reading_time(context, since="2026-09-29")
 
-    assert matter.last.url.params["since"] == "2026-09-29T00:00:00+00:00"
+    assert matter.last.url.params["since"] == "2026-09-29T00:00:00Z"
     assert result == {
         "since": "2026-09-29",
         "until": "2026-10-04",
@@ -180,9 +180,10 @@ async def test_summarize_reading_time_uses_timezone(matter, context):
         context, since="2026-10-01", until="2026-10-02", timezone_name="America/Los_Angeles"
     )
 
-    assert matter.last.url.params["since"] == "2026-10-01T07:00:00+00:00"
+    assert matter.last.url.params["since"] == "2026-10-01T07:00:00Z"
     assert result["daily_minutes"] == {"2026-10-02": 10}
-    assert result["current_streak_days"] == 1
+    # Oct 2 ends two days before today (Oct 4), so there's no current streak to report.
+    assert "current_streak_days" not in result
 
 
 async def test_summarize_reading_time_excludes_sessions_after_until(matter, context):
@@ -195,7 +196,7 @@ async def test_summarize_reading_time_excludes_sessions_after_until(matter, cont
     result = await summarize_reading_time(context, since="2026-09-01", until="2026-09-30")
 
     assert result["total_minutes"] == 1
-    assert result["current_streak_days"] == 0
+    assert "current_streak_days" not in result
 
 
 async def test_summarize_reading_time_paginates_and_truncates(matter, context):
@@ -235,3 +236,80 @@ async def test_summarize_reading_time_validates(matter, context, kwargs, message
         await summarize_reading_time(context, **kwargs)
 
     assert matter.requests == []
+
+
+# --- Review follow-ups ---
+
+
+async def test_get_item_with_highlights_validates_id(matter, context):
+    with pytest.raises(RetryableToolError, match="not a valid Matter item ID"):
+        await get_item_with_highlights(context, "itm_1/annotations")
+
+    assert matter.requests == []
+
+
+async def test_list_recent_highlights_flags_more_highlights(matter, context):
+    matter.add("GET", "/items", make_list([make_item(id="itm_1")]))
+    matter.add(
+        "GET",
+        "/items/itm_1/annotations",
+        make_list(
+            [make_highlight(created_at="2026-10-02T09:00:00Z", updated_at="2026-10-02T09:00:00Z")],
+            next_cursor="p2",
+        ),
+    )
+
+    result = await list_recent_highlights(context, since="2026-09-27")
+
+    assert result["items"][0]["more_highlights"] is True
+
+
+async def test_summarize_reading_time_skips_sessions_after_until(matter, context):
+    # Three full pages of October sessions come back before any September ones.
+    for _ in range(3):
+        matter.add(
+            "GET", "/reading_sessions", make_list([session("2026-10-03T08:00:00Z", 60)], "more")
+        )
+    matter.add(
+        "GET",
+        "/reading_sessions",
+        make_list([session("2026-09-30T08:00:00Z", 600), session("2026-09-02T08:00:00Z", 300)]),
+    )
+
+    result = await summarize_reading_time(context, since="2026-09-01", until="2026-09-30")
+
+    assert len(matter.requests) == 4
+    assert result["total_minutes"] == 15
+    assert result["days_read"] == 2
+    assert "truncated" not in result
+
+
+async def test_summarize_reading_time_stops_skipping_and_says_so(matter, context):
+    matter.add("GET", "/reading_sessions", make_list([session("2026-10-03T08:00:00Z", 60)], "more"))
+
+    result = await summarize_reading_time(context, since="2026-09-01", until="2026-09-30")
+
+    assert len(matter.requests) == insights.MAX_SKIPPED_PAGES
+    assert result["truncated"] is True
+    assert "only part of the period" in result["note"]
+
+
+async def test_current_streak_counts_through_yesterday(matter, context):
+    matter.add(
+        "GET",
+        "/reading_sessions",
+        make_list([session("2026-10-03T08:00:00Z", 60), session("2026-10-02T08:00:00Z", 60)]),
+    )
+
+    result = await summarize_reading_time(context, since="2026-09-28")
+
+    assert result["current_streak_days"] == 2
+
+
+async def test_current_streak_is_zero_when_broken(matter, context):
+    matter.add("GET", "/reading_sessions", make_list([session("2026-10-01T08:00:00Z", 60)]))
+
+    result = await summarize_reading_time(context, since="2026-09-28")
+
+    assert result["current_streak_days"] == 0
+    assert result["longest_streak_days"] == 1
