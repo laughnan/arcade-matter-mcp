@@ -8,6 +8,7 @@ Rules applied everywhere:
 - Matter's API calls highlights "annotations"; shaped output uses the app's term.
 - ``reading_progress`` (0.0-1.0) becomes ``progress_percent`` (0-100).
 - Keys with ``None`` values are omitted, and flags like ``favorite`` only appear when true.
+  ``in_library: false`` marks search hits the user hasn't saved (``status: null``).
 """
 
 from collections.abc import Callable
@@ -51,6 +52,8 @@ def item(raw: Raw) -> Raw:
             "site": raw.get("site_name"),
             "author": author.get("name") if isinstance(author, dict) else None,
             "status": raw.get("status"),
+            # Search can return content the user hasn't saved; item endpoints 404 on it.
+            "in_library": False if "status" in raw and raw.get("status") is None else None,
             # Only worth mentioning while extraction is unfinished.
             "processing_status": processing if processing != "completed" else None,
             "content_type": raw.get("content_type"),

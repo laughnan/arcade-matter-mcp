@@ -14,6 +14,7 @@ from arcade_matter.tools._common import (
     Cursor,
     ItemId,
     Limit,
+    check_id,
     clamp_limit,
     validate_timestamp,
 )
@@ -75,7 +76,7 @@ async def list_items(
         "/items",
         status=status.value,
         is_favorite=True if favorites_only else None,
-        tag=tag_ids,
+        tag=[check_id(t, "tag") for t in tag_ids or []],
         content_type=content_types,
         updated_since=validate_timestamp(updated_since, "updated_since"),
         order=order.value,
@@ -91,6 +92,7 @@ async def get_item(
     item_id: ItemId,
 ) -> Annotated[dict, "One item with its metadata, tags and processing status"]:
     """Get a single item's metadata by ID. Use GetItemContent for the full text."""
+    item_id = check_id(item_id, "item")
     data = await client_from_context(context).get(f"/items/{item_id}")
     return shaping.item(data)
 
@@ -112,6 +114,7 @@ async def get_item_content(
     """Get an item's full text as Markdown, in chunks of up to max_chars. Matter allows only
     20 full-text fetches per minute, so use excerpts from ListItems or GetItem when they're
     enough."""
+    item_id = check_id(item_id, "item")
     data = await client_from_context(context).get(f"/items/{item_id}", include="markdown")
     item = shaping.item(data)
     header = {k: item[k] for k in ("id", "title", "url") if k in item}
@@ -119,12 +122,16 @@ async def get_item_content(
     markdown = data.get("markdown")
     if not markdown:
         status = data.get("processing_status")
-        reason = (
-            "Matter is still extracting this item; try again in a minute."
-            if status == "processing"
-            else "Matter has no text for this item."
-        )
-        return {**header, "content": None, "note": reason}
+        if status == "processing":
+            reason = "Matter is still extracting this item; try again in a minute."
+        elif status == "failed":
+            reason = (
+                "Matter couldn't extract this item's text. Open the URL instead, or save it "
+                "again later."
+            )
+        else:
+            reason = "Matter has no text for this item (for example a podcast or video)."
+        return {**header, "processing_status": status, "content": None, "note": reason}
 
     size = max(MIN_CONTENT_CHARS, min(int(max_chars), MAX_CONTENT_CHARS))
     start = max(0, int(offset))

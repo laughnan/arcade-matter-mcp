@@ -18,9 +18,21 @@ from arcade_matter.tools._common import (
 )
 
 
-class SearchStatus(str, Enum):
+class SearchScope(str, Enum):
+    LIBRARY = "library"
     QUEUE = "queue"
     ARCHIVE = "archive"
+    EVERYTHING = "everything"
+
+
+# Matter's search `status` filter. Omitting it searches all of Matter, including content
+# the user hasn't saved.
+_SCOPE_STATUS = {
+    SearchScope.LIBRARY: "queue,archive",
+    SearchScope.QUEUE: "queue",
+    SearchScope.ARCHIVE: "archive",
+    SearchScope.EVERYTHING: None,
+}
 
 
 @tool(requires_secrets=SECRETS, metadata=READ_ONLY)
@@ -31,15 +43,16 @@ async def search_library(
         'Search text, at least 2 characters. Supports operators: "exact phrase", -exclude, '
         "by:author, site:example.com and title:word.",
     ],
-    status: Annotated[
-        SearchStatus | None,
-        "Only search the 'queue' or the 'archive'. Omit to search everything.",
-    ] = None,
+    scope: Annotated[
+        SearchScope,
+        "What to search: 'library' (the user's saved queue and archive), 'queue', 'archive', "
+        "or 'everything' (all of Matter, including content the user hasn't saved).",
+    ] = SearchScope.LIBRARY,
     limit: Limit = DEFAULT_LIMIT,
     cursor: Cursor = None,
 ) -> Annotated[dict, "Matching items, most relevant first"]:
     """Search the user's Matter library by full text, title, author or site, ranked by
-    relevance."""
+    relevance. Results marked in_library: false aren't saved, so item tools can't use them."""
     text = query.strip()
     if len(text) < 2:
         raise RetryableToolError(
@@ -50,7 +63,7 @@ async def search_library(
         "/search",
         query=text,
         type="items",
-        status=status.value if status else None,
+        status=_SCOPE_STATUS[scope],
         limit=clamp_limit(limit),
         cursor=cursor,
     )

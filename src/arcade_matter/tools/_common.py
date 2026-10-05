@@ -1,5 +1,6 @@
 """Shared secret, metadata and parameter helpers for Matter tools."""
 
+import re
 from datetime import date, datetime, time, timezone
 from typing import Annotated
 
@@ -93,3 +94,25 @@ def validate_timestamp(value: str | None, name: str) -> str | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+_ID_PREFIXES = {"item": "itm", "highlight": "ann", "tag": "tag"}
+
+
+def check_id(value: str, kind: str) -> str:
+    """Return a Matter ID after checking it matches the documented pattern.
+
+    IDs go into URL paths, so this keeps a value like ``itm_1/tags/tag_2`` from turning one
+    call into a different endpoint.
+    """
+    prefix = _ID_PREFIXES[kind]
+    text = (value or "").strip()
+    if not re.fullmatch(rf"{prefix}_[0-9A-Za-z]+", text):
+        raise RetryableToolError(
+            f"'{value}' is not a valid Matter {kind} ID.",
+            additional_prompt_content=(
+                f"{kind.capitalize()} IDs look like '{prefix}_abc123'. Look the ID up with a "
+                "list or search tool and retry."
+            ),
+        )
+    return text

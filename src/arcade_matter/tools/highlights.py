@@ -13,6 +13,7 @@ from arcade_matter.tools._common import (
     Cursor,
     ItemId,
     Limit,
+    check_id,
     clamp_limit,
 )
 
@@ -25,6 +26,7 @@ async def list_highlights(
     cursor: Cursor = None,
 ) -> Annotated[dict, "The item's highlights with their text and notes"]:
     """List the passages the user highlighted in one item, with any notes they added."""
+    item_id = check_id(item_id, "item")
     data = await client_from_context(context).get(
         f"/items/{item_id}/annotations", limit=clamp_limit(limit), cursor=cursor
     )

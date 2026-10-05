@@ -11,7 +11,7 @@ from arcade_matter.tools.items import (
     get_item_content,
     list_items,
 )
-from arcade_matter.tools.search import SearchStatus, search_library
+from arcade_matter.tools.search import SearchScope, search_library
 from arcade_matter.tools.tags import list_tags
 
 # --- ListItems ---
@@ -47,7 +47,7 @@ async def test_list_items_filters(matter, context):
         "is_favorite": "true",
         "tag": "tag_a,tag_b",
         "content_type": "article,podcast",
-        "updated_since": "2026-09-01",
+        "updated_since": "2026-09-01T00:00:00Z",
         "order": "library_position",
         "limit": "100",
         "cursor": "cur_1",
@@ -116,7 +116,12 @@ async def test_get_item_content_clamps_max_chars(matter, context):
 
 
 @pytest.mark.parametrize(
-    ("status", "note"), [("processing", "still extracting"), ("failed", "no text")]
+    ("status", "note"),
+    [
+        ("processing", "still extracting"),
+        ("failed", "couldn't extract"),
+        ("completed", "no text"),
+    ],
 )
 async def test_get_item_content_without_markdown(matter, context, status, note):
     matter.add("GET", "/items/itm_1", make_item(processing_status=status))
@@ -137,7 +142,7 @@ async def test_search_library(matter, context):
         {"object": "search_results", "items": make_list([make_item()], next_cursor="s2")},
     )
 
-    result = await search_library(context, '  "attention" site:example.com ', SearchStatus.QUEUE)
+    result = await search_library(context, '  "attention" site:example.com ', SearchScope.QUEUE)
 
     assert dict(matter.last.url.params) == {
         "query": '"attention" site:example.com',
@@ -211,8 +216,10 @@ async def test_list_reading_sessions(matter, context):
 
     result = await list_reading_sessions(context, since="2026-10-01T00:00:00Z")
 
-    assert matter.last.url.params["since"] == "2026-10-01T00:00:00+00:00"
-    assert result == {"sessions": [{"date": "2026-10-03T08:00:00Z", "seconds_read": 600}]}
+    assert matter.last.url.params["since"] == "2026-10-01T00:00:00Z"
+    assert result == {
+        "sessions": [{"id": "rs_1", "started_at": "2026-10-03T08:00:00Z", "seconds_read": 600}]
+    }
 
 
 async def test_not_found_is_retryable(matter, context):
@@ -220,3 +227,69 @@ async def test_not_found_is_retryable(matter, context):
 
     with pytest.raises(RetryableToolError, match="could not find"):
         await get_item(context, "itm_missing")
+
+
+# --- Review follow-ups: content status, search scope, ID validation ---
+
+
+async def test_get_item_content_reports_processing_status(matter, context):
+    matter.add("GET", "/items/itm_1", make_item(processing_status="failed"))
+
+    result = await get_item_content(context, "itm_1")
+
+    assert result["processing_status"] == "failed"
+
+
+@pytest.mark.parametrize(
+    ("scope", "status"),
+    [
+        (SearchScope.LIBRARY, "queue,archive"),
+        (SearchScope.ARCHIVE, "archive"),
+        (SearchScope.EVERYTHING, None),
+    ],
+)
+async def test_search_scope(matter, context, scope, status):
+    matter.add("GET", "/search", {"object": "search_results", "items": make_list([])})
+
+    await search_library(context, "ai", scope)
+
+    assert matter.last.url.params.get("status") == status
+
+
+async def test_search_marks_unsaved_hits(matter, context):
+    unsaved = make_item(id="itm_9", status=None, library_position=None)
+    matter.add(
+        "GET",
+        "/search",
+        {"object": "search_results", "items": make_list([make_item(), unsaved])},
+    )
+
+    result = await search_library(context, "ai", SearchScope.EVERYTHING)
+
+    assert "in_library" not in result["items"][0]
+    assert result["items"][1]["in_library"] is False
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda ctx: get_item(ctx, "itm_1/tags/tag_ai"),
+        lambda ctx: get_item(ctx, "../me"),
+        lambda ctx: get_item_content(ctx, "tag_ai"),
+        lambda ctx: list_highlights(ctx, "itm_1?x=1"),
+        lambda ctx: list_items(ctx, tag_ids=["tag_ok", "tag/bad"]),
+    ],
+)
+async def test_rejects_malformed_ids(matter, context, call):
+    with pytest.raises(RetryableToolError, match="not a valid Matter"):
+        await call(context)
+
+    assert matter.requests == []
+
+
+async def test_strips_whitespace_around_ids(matter, context):
+    matter.add("GET", "/items/itm_1", make_item())
+
+    await get_item(context, " itm_1 ")
+
+    assert matter.last.url.path == "/public/v1/items/itm_1"
