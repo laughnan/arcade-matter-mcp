@@ -16,6 +16,9 @@ READ_TOOLS: set[str] = {
     "SearchLibrary",
     "ListHighlights",
     "ListTags",
+    "GetItemWithHighlights",
+    "ListRecentHighlights",
+    "SummarizeReadingTime",
 }
 WRITE_TOOLS: set[str] = {
     "SaveItem",

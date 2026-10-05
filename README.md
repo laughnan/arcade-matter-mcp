@@ -38,7 +38,14 @@ Phase 2 (writes):
 | `Matter.SetHighlightNote` | Add, change or clear a highlight's note |
 | `Matter.DeleteItem` / `Matter.DeleteHighlight` / `Matter.DeleteTag` | Permanent deletes (destructive) |
 
-The rest of the catalog lands in phases (see [docs/SPEC.md](docs/SPEC.md#tool-catalog)).
+Phase 3 (summaries, read-only):
+
+| Tool | What it does |
+|---|---|
+| `Matter.GetItemWithHighlights` | An item with all its highlights and notes |
+| `Matter.ListRecentHighlights` | Highlights made or edited recently, grouped by item |
+| `Matter.SummarizeReadingTime` | Reading time totals, averages, streaks and busiest day for a period |
+
 Every tool is tagged read-only or write (and delete tools as destructive), so a gateway can
 expose only the read tools.
 
@@ -57,6 +64,12 @@ uv tool install arcade-mcp      # Arcade CLI
 uv sync --extra dev             # project and dev dependencies
 uv run pytest                   # unit tests (Matter is mocked; no network)
 uv run ruff check . && uv run ruff format --check . && uv run mypy src
+```
+
+Tool-selection evals (need an LLM API key; they don't call Matter):
+
+```bash
+ANTHROPIC_API_KEY=... uv run arcade evals evals/ -p anthropic
 ```
 
 To try the tools against your own library locally, run the server over stdio (Arcade's
