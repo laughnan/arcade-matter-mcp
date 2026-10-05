@@ -97,7 +97,9 @@ tools that need secrets.
 
 - **Base URL:** `https://api.getmatter.com/public/v1`. JSON bodies; every object has an
   `object` field. IDs are prefixed (`itm_`, `ann_`, `tag_`, `aut_`, `rs_`, `act_`).
-  Timestamps are ISO 8601 UTC.
+  Timestamps are ISO 8601 UTC. Timestamp filters (`updated_since`, `since`) are
+  `date-time` values, so tools expand a bare date to midnight UTC
+  (`2026-10-01T00:00:00Z`) before sending it.
 - **Lists:** `{object: "list", results, has_more, next_cursor}`, with an opaque `cursor`
   and `limit` from 1 to 100 (default 25).
 - **Item statuses:** `inbox` (feeds and newsletters), `queue` (reading list) and
@@ -105,6 +107,10 @@ tools that need secrets.
 - **Saving is asynchronous.** `POST /items` returns right away with
   `processing_status: "processing"`; extraction usually finishes in 20 to 60 seconds.
   Saving a URL that's already in the library returns the existing item (200, not 201).
+- **Search isn't limited to the library.** `GET /search` returns
+  `{object: "search_results", items: <list>}`, and with no `status` filter it can include
+  content the user hasn't saved (`status: null`, `library_position: null`). Those IDs fail
+  with 404 on item endpoints.
 - **Errors:** `{"error": {"code", "message", "field"}}`. The docs and the OpenAPI
   examples use different `code` values, so the client keys on the HTTP status. A 404 is
   also returned for resources owned by another account.
@@ -113,7 +119,8 @@ tools that need secrets.
 
 ### Rate limits
 
-Per token, reported on each response in `X-RateLimit-Limit`, `-Remaining` and `-Reset`:
+Per token. Each response reports the bucket it counted against in `X-RateLimit-Limit`,
+`-Remaining` and `-Reset`; the account's `rate_limit` field holds only the fixed caps.
 
 | Bucket | Limit | Counts |
 |---|---|---|
@@ -183,7 +190,9 @@ These apply to every tool.
      `{id, name}`).
    - Drop fields agents don't need (`object`, `image_url`, `library_position`,
      `inbox_position`) and omit keys whose value is `null`.
-   - Report `reading_progress` as a whole percentage.
+   - Report `reading_progress` (0.0 to 1.0 on the wire) as a whole `progress_percent`.
+     The write side takes the same 0 to 100 percentage and divides by 100.
+   - Mark search hits that aren't in the library with `in_library: false`.
    - Treat `content_type` as an open string; the docs and the OpenAPI enum disagree.
 5. **Bounded output.**
    - List tools take `limit` (default 25, max 100) and an optional `cursor`, and return
@@ -206,6 +215,11 @@ These apply to every tool.
    - 429: see rule 7. Other statuses: `UpstreamError`.
 9. **Writes are explicit.** Write tools take exact IDs. Delete tools are tagged
    destructive and never infer their target from a vague request.
+10. **IDs are validated.** Every ID parameter must match Matter's pattern (`itm_…`,
+    `ann_…`, `tag_…`, letters and digits only) before it's put in a URL path, so a value
+    like `itm_1/tags/tag_2` can't redirect a call to a different endpoint.
+11. **Deletes are safe to retry.** Delete tools are marked idempotent, so a 404 on
+    `DELETE` returns `deleted: false, not_found: true` instead of an error.
 
 ## Tool catalog
 
@@ -217,26 +231,26 @@ These are read-only, idempotent and non-destructive.
 
 | Tool | Endpoint | Parameters | Returns |
 |---|---|---|---|
-| `GetAccount` | `GET /me` | none | name, email, account creation date and rate limits |
-| `ListItems` | `GET /items` | `status` (`queue` default, `inbox`, `archive`, `all`), `is_favorite`, `tag_ids`, `content_type`, `updated_since`, `order` (`updated`, `library_position`, `inbox_position`), `limit`, `cursor` | items: ID, title, URL, site, author, status, content type, word count, progress, favorite, tags, excerpt, `updated_at` |
+| `GetAccount` | `GET /me` | none | name, email, account creation date, rate-limit caps, and the read quota remaining (from the response headers) |
+| `ListItems` | `GET /items` | `status` (`queue` default, `inbox`, `archive`, `all`), `favorites_only` (sends `is_favorite=true`), `tag_ids` (sent as `tag`), `content_types` (open strings, sent as `content_type`), `updated_since`, `order` (`updated`, `library_position`, `inbox_position`), `limit`, `cursor` | items: ID, title, URL, site, author, status, content type, word count, progress, favorite, tags, excerpt, `updated_at` |
 | `GetItem` | `GET /items/{id}` | `item_id` | one item, with its processing status |
-| `GetItemContent` | `GET /items/{id}?include=markdown` | `item_id`, `max_chars`, `offset` | the item's Markdown text, bounded (see rule 5). Uses the `markdown` bucket |
-| `SearchLibrary` | `GET /search?type=items` | `query` (2+ characters; supports `"phrase"`, `-term`, `by:`, `site:`, `title:`), `status` (`queue`, `archive`), `limit`, `cursor` | items ranked by relevance |
+| `GetItemContent` | `GET /items/{id}?include=markdown` | `item_id`, `max_chars`, `offset` | the item's Markdown text, bounded (see rule 5). Uses the `markdown` bucket (20/min). `markdown` is `null` while extraction is `processing` or after it `failed`; the tool returns `processing_status` and a note saying which, instead of empty text |
+| `SearchLibrary` | `GET /search?type=items` | `query` (2+ characters; supports `"phrase"`, `-term`, `by:`, `site:`, `title:`), `scope` (`library` default, sent as `status=queue,archive`; `queue`; `archive`; `everything`, which omits `status`), `limit`, `cursor` | items ranked by relevance, read from the `items` key of the search response. Hits outside the library are marked `in_library: false` |
 | `ListHighlights` | `GET /items/{id}/annotations` | `item_id`, `limit`, `cursor` | highlights: ID, text, note, created and updated dates |
 | `ListTags` | `GET /tags` | `limit`, `cursor` | tags with item counts |
-| `ListReadingSessions` | `GET /reading_sessions` | `since`, `limit`, `cursor` | daily reading time, newest first |
+| `ListReadingSessions` | `GET /reading_sessions` | `since`, `limit`, `cursor` | reading sessions, newest first: ID, `started_at` and seconds read. Several sessions can fall on the same day |
 
 ### Phase 2: Writes
 
 | Tool | Endpoint | Behavior |
 |---|---|---|
-| `SaveItem` | `POST /items` | create, idempotent (saving a URL twice returns the existing item). `url` (http or https), `status` (`queue` default, or `archive`). Returns right away; the response says whether extraction is still processing and to check `GetItem` later |
-| `UpdateItem` | `PATCH /items/{id}` | update, idempotent. `status` (`queue` or `archive`), `is_favorite`, `reading_progress` (0 to 100 percent). At least one field required |
+| `SaveItem` | `POST /items` | create, idempotent. `url` (http or https), `status` (`queue` default, or `archive`). Returns right away; the response says whether extraction is still processing and to check `GetItem` later. Matter answers 201 for a new save and 200 with the existing item, unchanged, when the URL is already saved; the tool reports `already_in_library` and, if the existing item's status differs from the one asked for, says to use `UpdateItem` |
+| `UpdateItem` | `PATCH /items/{id}` | update, idempotent. `status` (`queue` or `archive`), `favorite`, `progress_percent` (0 to 100, sent as Matter's 0.0 to 1.0). At least one field required |
 | `AddTag` | `POST /items/{id}/tags` | update, idempotent. Adds a tag by name (case-insensitive), creating it if needed |
 | `RemoveTag` | `DELETE /items/{id}/tags/{tag_id}` | update, idempotent. Removes a tag from one item; the tag itself is kept |
-| `SetHighlightNote` | `PATCH /annotations/{id}` | update, idempotent. Sets a highlight's note; an empty string clears it |
+| `SetHighlightNote` | `PATCH /annotations/{id}` | update, idempotent. Sets a highlight's note. An empty string clears it (sent as JSON `null`, which is what Matter requires) |
 | `RenameTag` | `PATCH /tags/{id}` | update, idempotent. Renames a tag everywhere. 409 if the name is taken |
-| `DeleteItem` | `DELETE /items/{id}` | delete, destructive. Permanently deletes an item with its highlights and tags |
+| `DeleteItem` | `DELETE /items/{id}` | delete, destructive. Permanently deletes an item and its highlights. Its tag associations go with it; the tags themselves and other items are unchanged (use `DeleteTag` to delete a tag) |
 | `DeleteHighlight` | `DELETE /annotations/{id}` | delete, destructive |
 | `DeleteTag` | `DELETE /tags/{id}` | delete, destructive. Removes the tag from every item |
 
@@ -246,9 +260,9 @@ These are read-only.
 
 | Tool | Answers | Built from |
 |---|---|---|
-| `GetItemWithHighlights` | "What did I highlight in this article?" The item, its highlights and notes | `GetItem` + one page of highlights (2 requests) |
-| `ListRecentHighlights` | "What did I highlight this week?" Highlights grouped by item, for items updated since a date | one page of items by `updated_since` + highlights for up to `max_items` items (default 10, max 20), so at most 21 requests. Items whose highlights are older than `since` are left out |
-| `SummarizeReadingTime` | "How much have I read this month?" Total and average time per day, days read, longest streak, busiest day | reading sessions since a date, up to 4 pages |
+| `GetItemWithHighlights` | "What did I highlight in this article?" The item, its highlights and notes (up to 100, with `more_highlights` when there are more) | `GetItem` + one page of highlights (2 requests) |
+| `ListRecentHighlights` | "What did I highlight this week?" Highlights made or edited since a date (default 7 days ago), grouped by item | one page of items by `updated_since` (`status=all`) + one page of highlights (up to 100) for each of up to `max_items` items (default 10, max 20), so at most 21 requests. A highlight is kept when its own `created_at` or `updated_at` is on or after `since`. Items with no recent highlights are left out. `updated_at` also moves on progress, favorite and tag changes, so `more_items` flags items that weren't checked, and `more_highlights` on a group flags highlights past the first page |
+| `SummarizeReadingTime` | "How much have I read this month?" For `since` to `until` (default the last 30 days) in a given IANA `timezone_name` (default UTC): total minutes, sessions, days read, averages per day and per reading day, longest streak, busiest day, and per-day minutes for ranges up to 62 days. `current_streak_days` (the streak running through today or yesterday) only appears when the period reaches yesterday | reading sessions since local midnight of `since`, 100 per page. Matter returns sessions newest first and has no `until` filter, so pages newer than `until` are skipped (up to 6 pages) before up to 4 pages inside the period are counted. `truncated` with a note if either limit is hit |
 
 ## Testing
 
@@ -259,7 +273,8 @@ These are read-only.
 - **Server tests:** every tool is registered, requires `MATTER_API_TOKEN`, declares
   metadata, and read tools are read-only.
 - **Tool evals (`arcade evals`):** suites in `evals/` check that models pick the right
-  tool with the right arguments. Examples: "What's in my queue about AI?" should call
+  tool with the right arguments. Date arguments are scored with a tolerance rather than
+  an exact string match. Examples: "What's in my queue about AI?" should call
   `SearchLibrary`; "Archive that article" should call `UpdateItem` with
   `status="archive"`.
 - **Manual end-to-end testing:** run the server locally over stdio with the token in
@@ -274,11 +289,13 @@ is a separate pull request.
 2. **Foundations.**
    - Remove the sample tools (`greet`, `whisper_secret`, `star_repo`).
    - Add `client.py`, `shaping.py` and `tools/_common.py`, the test harness and CI.
+   - Add `GetAccount` from Phase 1. `MCPApp` won't start without at least one tool, and
+     this one-request tool doubles as an end-to-end check of the token secret.
    - Fix `pyproject.toml`: description, and align ruff and mypy targets with
      `requires-python`.
    - Replace the sample secret in `.env.example` with `MATTER_API_TOKEN`.
    - Write the README.
-3. **Phase 1 read tools** with tests.
+3. **Phase 1 read tools** (the rest of them) with tests.
 4. **First deploy:** set the secret, `arcade deploy`, a read-only gateway, and an
    end-to-end check.
 5. **Phase 2 write tools** with tests.
@@ -292,9 +309,7 @@ is a separate pull request.
    (up to about 60 seconds, using read quota), or always return right away?
 3. **Separate read and write gateways.** Should the recommended setup be a read-only
    gateway plus a separate gateway that includes the write and delete tools?
-4. **`status=all`.** Matter doesn't say whether it includes items with no status. Check
-   against the live API in step 4.
-5. **Python version on Arcade Cloud.** `requires-python` is `>=3.10`. Confirm which
+4. **Python version on Arcade Cloud.** `requires-python` is `>=3.10`. Confirm which
    version Arcade Cloud runs, and set ruff and mypy targets to match.
 
 ## References
