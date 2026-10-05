@@ -98,3 +98,11 @@ def test_reading_session_keeps_id_and_start_time():
     )
 
     assert shaped == {"id": "rs_1", "started_at": "2026-04-09T14:23:00Z", "seconds_read": 180}
+
+
+def test_item_in_library_flag_only_for_null_status():
+    assert shaping.item(make_item(status=None))["in_library"] is False
+    assert "in_library" not in shaping.item(make_item())
+    raw = make_item()
+    del raw["status"]
+    assert "in_library" not in shaping.item(raw)

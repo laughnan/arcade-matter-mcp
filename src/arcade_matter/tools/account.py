@@ -1,4 +1,4 @@
-"""Account tools."""
+"""Account and reading-history tools."""
 
 from typing import Annotated
 
@@ -6,7 +6,15 @@ from arcade_mcp_server import Context, tool
 
 from arcade_matter import shaping
 from arcade_matter.client import client_from_context
-from arcade_matter.tools._common import READ_ONLY, SECRETS
+from arcade_matter.tools._common import (
+    DEFAULT_LIMIT,
+    READ_ONLY,
+    SECRETS,
+    Cursor,
+    Limit,
+    clamp_limit,
+    validate_timestamp,
+)
 
 
 @tool(requires_secrets=SECRETS, metadata=READ_ONLY)
@@ -25,3 +33,23 @@ async def get_account(
     if quota:
         result["read_quota"] = quota
     return result
+
+
+@tool(requires_secrets=SECRETS, metadata=READ_ONLY)
+async def list_reading_sessions(
+    context: Context,
+    since: Annotated[
+        str | None, "Only return sessions on or after this ISO date or datetime."
+    ] = None,
+    limit: Limit = DEFAULT_LIMIT,
+    cursor: Cursor = None,
+) -> Annotated[dict, "Reading sessions (id, start time, seconds read), newest first"]:
+    """List the user's reading sessions, newest first. Each session is one period of reading
+    with its start time and duration in seconds; a day can have several."""
+    data = await client_from_context(context).get(
+        "/reading_sessions",
+        since=validate_timestamp(since, "since"),
+        limit=clamp_limit(limit),
+        cursor=cursor,
+    )
+    return shaping.page(data, "sessions", shaping.reading_session)

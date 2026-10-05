@@ -7,7 +7,16 @@ from arcade_mcp_server.metadata import ServiceDomain
 
 from arcade_matter.server import app
 
-READ_TOOLS: set[str] = {"GetAccount"}
+READ_TOOLS: set[str] = {
+    "GetAccount",
+    "ListReadingSessions",
+    "ListItems",
+    "GetItem",
+    "GetItemContent",
+    "SearchLibrary",
+    "ListHighlights",
+    "ListTags",
+}
 WRITE_TOOLS: set[str] = set()
 EXPECTED_TOOLS = READ_TOOLS | WRITE_TOOLS
 

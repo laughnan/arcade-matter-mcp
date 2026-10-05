@@ -15,7 +15,7 @@ if str(_SRC) not in sys.path:
 from arcade_mcp_server import MCPApp  # noqa: E402
 from arcade_mcp_server.mcp_app import TransportType  # noqa: E402
 
-from arcade_matter.tools import account  # noqa: E402
+from arcade_matter.tools import account, highlights, items, search, tags  # noqa: E402
 
 INSTRUCTIONS = """\
 Tools for reading and organizing the user's Matter library. Matter is a read-later app
@@ -33,7 +33,7 @@ for articles, newsletters, podcasts, PDFs and tweets.
 """
 
 # Tool modules are added here as each phase of docs/SPEC.md lands.
-TOOL_MODULES: tuple[ModuleType, ...] = (account,)
+TOOL_MODULES: tuple[ModuleType, ...] = (account, items, search, highlights, tags)
 
 app = MCPApp(name="matter", version="0.1.0", instructions=INSTRUCTIONS, log_level="INFO")
 
