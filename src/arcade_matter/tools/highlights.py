@@ -8,13 +8,17 @@ from arcade_matter import shaping
 from arcade_matter.client import client_from_context
 from arcade_matter.tools._common import (
     DEFAULT_LIMIT,
+    DELETES,
     READ_ONLY,
     SECRETS,
+    UPDATES,
     Cursor,
+    HighlightId,
     ItemId,
     Limit,
     check_id,
     clamp_limit,
+    not_found,
 )
 
 
@@ -31,3 +35,30 @@ async def list_highlights(
         f"/items/{item_id}/annotations", limit=clamp_limit(limit), cursor=cursor
     )
     return shaping.page(data, "highlights", shaping.highlight)
+
+
+@tool(requires_secrets=SECRETS, metadata=UPDATES)
+async def set_highlight_note(
+    context: Context,
+    highlight_id: HighlightId,
+    note: Annotated[str, "The note text. Pass an empty string to remove the note."],
+) -> Annotated[dict, "The updated highlight"]:
+    """Add, replace or remove the note on a highlight. Matter's API can't create highlights."""
+    highlight_id = check_id(highlight_id, "highlight")
+    data = await client_from_context(context).patch(
+        f"/annotations/{highlight_id}", {"note": note.strip() or None}
+    )
+    return shaping.highlight(data)
+
+
+@tool(requires_secrets=SECRETS, metadata=DELETES)
+async def delete_highlight(
+    context: Context,
+    highlight_id: HighlightId,
+) -> Annotated[dict, "Confirmation of the deleted highlight ID"]:
+    """Permanently delete a highlight and its note. This can't be undone."""
+    highlight_id = check_id(highlight_id, "highlight")
+    path = f"/annotations/{highlight_id}"
+    if await client_from_context(context).delete(path, missing_ok=True) is None:
+        return not_found("highlight_id", highlight_id)
+    return {"deleted": True, "highlight_id": highlight_id}

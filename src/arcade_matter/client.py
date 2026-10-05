@@ -113,8 +113,15 @@ class MatterClient:
     async def patch(self, path: str, json: dict[str, Any]) -> dict[str, Any]:
         return await self.request("PATCH", path, json=json)
 
-    async def delete(self, path: str) -> dict[str, Any]:
-        return await self.request("DELETE", path)
+    async def delete(self, path: str, *, missing_ok: bool = False) -> dict[str, Any] | None:
+        """DELETE ``path``. With ``missing_ok``, a 404 returns ``None`` instead of raising, so
+        repeating a delete that already succeeded isn't reported as a failure."""
+        try:
+            return await self.request("DELETE", path)
+        except RetryableToolError:
+            if missing_ok and self.last_status == 404:
+                return None
+            raise
 
 
 def client_from_context(context: Any) -> MatterClient:

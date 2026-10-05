@@ -58,6 +58,8 @@ MAX_LIMIT = 100
 ItemId = Annotated[
     str, "The item ID (e.g. 'itm_r9f3a'). Use ListItems or SearchLibrary to find it."
 ]
+HighlightId = Annotated[str, "The highlight ID (e.g. 'ann_x7y2z'). Use ListHighlights to find it."]
+TagId = Annotated[str, "The tag ID (e.g. 'tag_n5j2x'). Use ListTags to find it."]
 Limit = Annotated[int, f"Maximum number of results to return (1-{MAX_LIMIT})."]
 Cursor = Annotated[
     str | None,
@@ -116,3 +118,24 @@ def check_id(value: str, kind: str) -> str:
             ),
         )
     return text
+
+
+def require_text(value: str, name: str) -> str:
+    text = (value or "").strip()
+    if not text:
+        raise RetryableToolError(
+            f"{name} must not be empty.",
+            additional_prompt_content=f"Pass a non-empty {name}.",
+        )
+    return text
+
+
+def not_found(key: str, value: str) -> dict[str, object]:
+    """Result for a delete whose target doesn't exist. Deletes are marked idempotent, so a
+    repeat of a delete that already succeeded is reported, not raised."""
+    return {
+        "deleted": False,
+        "not_found": True,
+        key: value,
+        "note": "Nothing with this ID exists; it may already have been deleted.",
+    }

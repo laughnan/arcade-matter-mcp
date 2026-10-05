@@ -27,6 +27,17 @@ Phase 1 (read-only):
 | `Matter.ListTags` | Tags and how many items each is on |
 | `Matter.ListReadingSessions` | Reading sessions with start time and duration |
 
+Phase 2 (writes):
+
+| Tool | What it does |
+|---|---|
+| `Matter.SaveItem` | Save a URL to the queue or archive |
+| `Matter.UpdateItem` | Archive or re-queue, favorite, or set reading progress |
+| `Matter.AddTag` / `Matter.RemoveTag` | Tag or untag an item (tags are created by name) |
+| `Matter.RenameTag` | Rename a tag everywhere |
+| `Matter.SetHighlightNote` | Add, change or clear a highlight's note |
+| `Matter.DeleteItem` / `Matter.DeleteHighlight` / `Matter.DeleteTag` | Permanent deletes (destructive) |
+
 The rest of the catalog lands in phases (see [docs/SPEC.md](docs/SPEC.md#tool-catalog)).
 Every tool is tagged read-only or write (and delete tools as destructive), so a gateway can
 expose only the read tools.
