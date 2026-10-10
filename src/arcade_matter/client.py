@@ -6,7 +6,7 @@ Non-2xx responses are translated into Arcade errors with messages a model can ac
 
 import asyncio
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, NoReturn
 
 import httpx
 from arcade_mcp_server.exceptions import (
@@ -23,6 +23,12 @@ DEFAULT_RETRY_AFTER_MS = 60_000
 # A 429 asking us to wait this long or less is the 5 requests/second burst limit; wait it
 # out once. Longer waits are per-minute buckets and are surfaced to the caller.
 MAX_INLINE_RETRY_SECONDS = 5.0
+# The most response body (after decompression) read from Matter. Bodies are streamed and
+# the read stops as soon as this is passed, so an oversized or endless response can't
+# exhaust memory. Output limits such as GetItemContent's max_chars apply afterwards and
+# bound what the model sees, not what the server buffers. 10 MiB fits a book-length
+# article's Markdown with room to spare.
+MAX_RESPONSE_BYTES = 10 * 1024 * 1024
 
 # Overridden in tests with an httpx.MockTransport; None means real network access.
 TRANSPORT: httpx.AsyncBaseTransport | None = None
@@ -51,7 +57,8 @@ class MatterClient:
         """Send a request and return the decoded JSON body (``{}`` for 204 No Content).
 
         Honours ``Retry-After``: a short wait is slept through and the request retried
-        once; anything longer raises ``UpstreamRateLimitError``.
+        once; anything longer raises ``UpstreamRateLimitError``. A body larger than
+        ``MAX_RESPONSE_BYTES`` raises ``ToolExecutionError`` without being fully read.
         """
         query = _encode_params(params)
         async with httpx.AsyncClient(
@@ -60,12 +67,14 @@ class MatterClient:
             timeout=TIMEOUT_SECONDS,
             transport=TRANSPORT,
         ) as client:
-            response = await client.request(method, path, params=query, json=json)
+            request = client.build_request(method, path, params=query, json=json)
+            response = await _send_limited(client, request)
             if response.status_code == 429:
                 wait_ms = _retry_after_ms(response)
                 if wait_ms <= MAX_INLINE_RETRY_SECONDS * 1000:
                     await asyncio.sleep(wait_ms / 1000)
-                    response = await client.request(method, path, params=query, json=json)
+                    request = client.build_request(method, path, params=query, json=json)
+                    response = await _send_limited(client, request)
         self.last_status = response.status_code
         self.last_headers = response.headers
         if response.is_error:
@@ -138,6 +147,52 @@ def client_from_context(context: Any) -> MatterClient:
             ),
         )
     return MatterClient(token)
+
+
+async def _send_limited(client: httpx.AsyncClient, request: httpx.Request) -> httpx.Response:
+    """Send ``request`` and read at most ``MAX_RESPONSE_BYTES`` of its decoded body.
+
+    Returns a fully read response. Raises ``ToolExecutionError`` as soon as the declared
+    Content-Length or the bytes actually received pass the limit; the connection is closed
+    either way.
+    """
+    response = await client.send(request, stream=True)
+    chunks: list[bytes] = []
+    try:
+        declared = response.headers.get("Content-Length", "")
+        # Content-Length counts encoded bytes, so it can only prove a body is too big.
+        if declared.isdigit() and int(declared) > MAX_RESPONSE_BYTES:
+            _raise_too_large(request, response.status_code, f"Content-Length {declared}")
+        received = 0
+        async for chunk in response.aiter_bytes():
+            received += len(chunk)
+            if received > MAX_RESPONSE_BYTES:
+                _raise_too_large(request, response.status_code, f"over {received} bytes")
+            chunks.append(chunk)
+    finally:
+        await response.aclose()
+    # The chunks are already decoded, so drop the headers that describe the encoded body.
+    headers = [
+        (k, v)
+        for k, v in response.headers.multi_items()
+        if k.lower() not in ("content-encoding", "content-length", "transfer-encoding")
+    ]
+    return httpx.Response(
+        response.status_code, headers=headers, content=b"".join(chunks), request=request
+    )
+
+
+def _raise_too_large(request: httpx.Request, status: int, detail: str) -> NoReturn:
+    limit_mb = MAX_RESPONSE_BYTES // (1024 * 1024)
+    # Not retryable: the same request would return the same oversized body.
+    raise ToolExecutionError(
+        f"Matter's response was larger than {limit_mb} MB, so it wasn't loaded. For an "
+        "item's text, open its URL instead.",
+        developer_message=(
+            f"Matter {request.method} {request.url.path} -> {status}: response body "
+            f"exceeds MAX_RESPONSE_BYTES={MAX_RESPONSE_BYTES} ({detail})"
+        ),
+    )
 
 
 def _encode_params(params: dict[str, Any] | None) -> dict[str, str]:
