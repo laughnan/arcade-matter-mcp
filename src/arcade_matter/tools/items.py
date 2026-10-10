@@ -1,8 +1,10 @@
 """Item tools: the articles, newsletters, podcasts, PDFs and tweets in the library."""
 
+import ipaddress
+import socket
 from enum import Enum
 from typing import Annotated
-from urllib.parse import urlparse
+from urllib.parse import urlsplit
 
 from arcade_mcp_server import Context, tool
 from arcade_mcp_server.exceptions import RetryableToolError
@@ -49,6 +51,13 @@ class ItemOrder(str, Enum):
 DEFAULT_CONTENT_CHARS = 20_000
 MIN_CONTENT_CHARS = 1_000
 MAX_CONTENT_CHARS = 100_000
+
+# Longer URLs are almost never articles, and a cap limits how much data one save can carry
+# out in a query string.
+MAX_URL_CHARS = 2_048
+# Host names that only resolve inside a machine or private network.
+_LOCAL_HOSTS = ("localhost",)
+_LOCAL_SUFFIXES = (".localhost", ".local", ".internal", ".lan", ".home.arpa")
 
 
 @tool(requires_secrets=SECRETS, metadata=READ_ONLY)
@@ -164,7 +173,10 @@ async def get_item_content(
 @tool(requires_secrets=SECRETS, metadata=CREATES)
 async def save_item(
     context: Context,
-    url: Annotated[str, "The http:// or https:// URL to save."],
+    url: Annotated[
+        str,
+        "The public http:// or https:// URL to save, exactly as the user approved it.",
+    ],
     status: Annotated[
         TargetStatus, "Where to put it: 'queue' (the reading list) or 'archive'."
     ] = TargetStatus.QUEUE,
@@ -172,14 +184,9 @@ async def save_item(
     """Save a URL to the user's Matter library. Matter extracts the content in the
     background, usually within a minute; check GetItem later if processing_status is
     'processing'. If the URL is already saved, the existing item is returned unchanged with
-    already_in_library: true; use UpdateItem to move it."""
-    target = url.strip()
-    parsed = urlparse(target)
-    if parsed.scheme not in ("http", "https") or not parsed.netloc:
-        raise RetryableToolError(
-            f"'{url}' is not an http or https URL.",
-            additional_prompt_content="Pass a full URL starting with http:// or https://.",
-        )
+    already_in_library: true; use UpdateItem to move it. Matter fetches the URL, so show the
+    user the exact URL, including any query string, and get their approval before saving."""
+    target = check_save_url(url)
     client = client_from_context(context)
     data = await client.post("/items", {"url": target, "status": status.value})
     result = shaping.item(data)
@@ -243,3 +250,68 @@ async def delete_item(
     if await client_from_context(context).delete(f"/items/{item_id}", missing_ok=True) is None:
         return not_found("item_id", item_id)
     return {"deleted": True, "item_id": item_id}
+
+
+def check_save_url(url: str) -> str:
+    """Return ``url`` stripped, or raise if it isn't a public http(s) URL.
+
+    This is defense in depth, not an exfiltration control. It is purely syntactic: it doesn't
+    resolve DNS, so it can't catch a public name that points at a private address (or is
+    rebound to one), a redirect, or anything Matter does when it fetches the page. And a
+    public URL can still carry private data in its path or query. The real control is the
+    user approving the exact URL before SaveItem runs (see docs/security/save-item-urls.md).
+    """
+    target = (url or "").strip()
+    try:
+        parsed = urlsplit(target)
+        host = (parsed.hostname or "").rstrip(".").lower()
+        valid = parsed.scheme in ("http", "https") and bool(host)
+        parsed.port  # noqa: B018 - raises ValueError for a malformed port
+    except ValueError:
+        valid = False
+    if not valid:
+        raise RetryableToolError(
+            f"'{url}' is not an http or https URL.",
+            additional_prompt_content="Pass a full URL starting with http:// or https://.",
+        )
+    if len(target) > MAX_URL_CHARS:
+        raise RetryableToolError(
+            f"That URL is longer than {MAX_URL_CHARS} characters.",
+            additional_prompt_content="Pass the article's canonical URL without extra data.",
+        )
+    if parsed.username is not None or parsed.password is not None:
+        raise RetryableToolError(
+            "URLs with a username or password in them can't be saved.",
+            additional_prompt_content="Remove the user:password@ part and retry.",
+        )
+    if _is_local_host(host):
+        raise RetryableToolError(
+            f"'{host}' is a local or private-network address, which Matter can't save.",
+            additional_prompt_content="Only public web pages can be saved to Matter.",
+        )
+    return target
+
+
+def _is_local_host(host: str) -> bool:
+    address = _parse_ip(host)
+    if address is not None:
+        if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+            address = address.ipv4_mapped
+        return not address.is_global or address.is_multicast
+    # A single-label name ("intranet") only resolves on a local network.
+    return "." not in host or host in _LOCAL_HOSTS or host.endswith(_LOCAL_SUFFIXES)
+
+
+def _parse_ip(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    try:
+        return ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    # Browsers and HTTP clients also accept shorthand IPv4 forms such as "127.1",
+    # "2130706433" and "0x7f.0.0.1". inet_aton parses those the same way.
+    if all(c in "0123456789abcdefx." for c in host):
+        try:
+            return ipaddress.IPv4Address(socket.inet_aton(host))
+        except OSError:
+            pass
+    return None
