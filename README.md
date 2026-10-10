@@ -55,7 +55,16 @@ expose only the read tools.
    [web.getmatter.com/settings](https://web.getmatter.com/settings) → **Generate API
    Token**. Generating a token revokes any previous one, so reuse an existing token if
    another tool (such as `matter-cli`) already has it.
-2. `cp .env.example .env` and set `MATTER_API_TOKEN`.
+2. Create `.env` readable only by you, then set `MATTER_API_TOKEN` in it:
+
+   ```bash
+   cp .env.example .env && chmod 600 .env
+   ls -l .env    # should show -rw------- (mode 0600)
+   ```
+
+   `cp` gives the copy `.env.example`'s mode (usually 0644, readable by other local users),
+   so run the `chmod` whenever you recreate `.env`. It's Git-ignored; never commit it, and
+   never paste the token into issues, tasks, logs or chat.
 
 ## Development
 
