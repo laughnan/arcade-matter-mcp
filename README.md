@@ -31,7 +31,7 @@ Phase 2 (writes):
 
 | Tool | What it does |
 |---|---|
-| `Matter.SaveItem` | Save a URL to the queue or archive |
+| `Matter.SaveItem` | Save a public URL to the queue or archive (have your client [approve each URL](docs/security/save-item-urls.md)) |
 | `Matter.UpdateItem` | Archive or re-queue, favorite, or set reading progress |
 | `Matter.AddTag` / `Matter.RemoveTag` | Tag or untag an item (tags are created by name) |
 | `Matter.RenameTag` | Rename a tag everywhere |
