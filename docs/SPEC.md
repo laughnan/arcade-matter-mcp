@@ -81,7 +81,8 @@ MCP client ──► Arcade MCP Gateway ──► arcade_matter (Arcade Cloud) �
 ## Setup (one-time, for each deployment)
 
 1. Generate a Matter API token: **web.getmatter.com/settings → Generate API Token**.
-2. Put it in `.env` (never committed) as `MATTER_API_TOKEN=mat_...`.
+2. Put it in `.env` (never committed, mode 0600 via `chmod 600 .env`) as
+   `MATTER_API_TOKEN=mat_...`.
 3. Run `arcade login`.
 4. Deploy with `arcade deploy -e src/arcade_matter/server.py`. Deploy uploads the values
    of the secrets the tools declare from `.env`. To rotate the token later without

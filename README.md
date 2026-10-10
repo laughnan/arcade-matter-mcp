@@ -55,16 +55,20 @@ expose only the read tools.
    [web.getmatter.com/settings](https://web.getmatter.com/settings) → **Generate API
    Token**. Generating a token revokes any previous one, so reuse an existing token if
    another tool (such as `matter-cli`) already has it.
-2. Create `.env` readable only by you, then set `MATTER_API_TOKEN` in it:
+2. Create `.env` if you don't have one, make it readable only by you, then set
+   `MATTER_API_TOKEN` in it:
 
    ```bash
-   cp .env.example .env && chmod 600 .env
-   ls -l .env    # should show -rw------- (mode 0600)
+   [ -f .env ] || cp .env.example .env   # never overwrites an existing .env
+   chmod 600 .env
+   ls -l .env                             # should show -rw------- (mode 0600)
    ```
 
-   `cp` gives the copy `.env.example`'s mode (usually 0644, readable by other local users),
-   so run the `chmod` whenever you recreate `.env`. It's Git-ignored; never commit it, and
-   never paste the token into issues, tasks, logs or chat.
+   Already have a `.env`? Just run `chmod 600 .env`. Copying `.env.example` over it would
+   replace your token with the placeholder. `cp` gives a new copy `.env.example`'s mode
+   (0644, readable by other local users), so the `chmod` is needed either way. `.env` is
+   Git-ignored; never commit it, and never paste the token into issues, tasks, logs or
+   chat.
 
 ## Development
 
@@ -107,8 +111,9 @@ and connect a client, for example `arcade connect claude-code --gateway <slug>`.
 
 ## Security
 
-Never commit tokens or personal library data. Tests use invented data only. The token is
-held by Arcade and injected per request; it is never exposed to the model.
+Never commit tokens or personal library data. Keep `.env` readable only by you
+(`chmod 600 .env`). Tests use invented data only. The token is held by Arcade and injected
+per request; it is never exposed to the model.
 
 ## License
 
