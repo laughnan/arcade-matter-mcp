@@ -74,9 +74,9 @@ MCP client ──► Arcade MCP Gateway ──► arcade_matter (Arcade Cloud) �
 - **Access control happens at the gateway and the client.** Every tool carries
   `ToolMetadata` behavior flags (`read_only`, `destructive` and so on). Routine use goes
   through a read-only gateway built by selecting only the read tools. Writes go through a
-  separate gateway, connected only through a client that enforces approval of each write
-  call. The server's "confirm before writing" instruction is advisory; a tool that is
-  called runs. Because the token is shared, both gateways should be limited to the
+  separate write-only gateway, connected only through a client that enforces approval of
+  every call to it. The server's "confirm before writing" instruction is advisory; a tool
+  that is called runs. Because the token is shared, both gateways should be limited to the
   token's owner (**Arcade Auth** mode, in a project with no other members). See
   [security/gateways.md](security/gateways.md).
 - **Rate limits are per token.** Every caller shares one quota (see
@@ -91,8 +91,10 @@ MCP client ──► Arcade MCP Gateway ──► arcade_matter (Arcade Cloud) �
    of the secrets the tools declare from `.env`. To rotate the token later without
    redeploying, run `arcade secret set MATTER_API_TOKEN=mat_...`.
 5. Create two MCP Gateways in the Arcade dashboard, both in **Arcade Auth** mode: one
-   with only the read tools, and one with the write tools for clients that enforce
-   approval of each write. Connect clients to `https://api.arcade.dev/mcp/<gateway-slug>`,
+   with only the read tools, for everyday use, and one with only the non-destructive
+   write tools (adding the `Delete*` tools only if needed) and no read tools. Connect the
+   write gateway, alongside the read one, only in clients that enforce approval of every
+   call to it. Connect clients to `https://api.arcade.dev/mcp/<gateway-slug>`,
    or run `arcade connect claude-code --gateway <gateway-slug>`.
 
 For local testing, run the server over stdio. Arcade's local HTTP transport doesn't serve
@@ -313,7 +315,7 @@ is a separate pull request.
 2. **Waiting for saves.** Should `SaveItem` optionally poll until extraction finishes
    (up to about 60 seconds, using read quota), or always return right away?
 3. ~~**Separate read and write gateways.**~~ Resolved: yes. A read-only gateway for
-   routine use, plus a write gateway behind client-enforced approval
+   routine use, plus a write-only gateway behind client-enforced approval
    ([security/gateways.md](security/gateways.md)).
 4. **Python version on Arcade Cloud.** `requires-python` is `>=3.10`. Confirm which
    version Arcade Cloud runs, and set ruff and mypy targets to match.

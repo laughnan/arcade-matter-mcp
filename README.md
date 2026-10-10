@@ -98,8 +98,9 @@ arcade secret set MATTER_API_TOKEN=mat_...
 Then create two MCP Gateways in the Arcade dashboard, both in Arcade Auth mode:
 
 - a **read-only gateway** with only the read tools, for everyday use;
-- a **write gateway** with the write tools, connected only through a client that asks you
-  to approve each write (and especially each delete) before it runs.
+- a **write-only gateway** with the write tools you want (and the delete tools only if you
+  need them), connected only through a client that asks you to approve every call to it.
+  That client also connects the read-only gateway to look up IDs.
 
 Connect a client with, for example, `arcade connect claude-code --gateway <slug>`. See
 [docs/security/gateways.md](docs/security/gateways.md) for the tool lists, client
