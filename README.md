@@ -57,7 +57,20 @@ read-only gateway day to day and a separate, approval-gated one for writes (see
    [web.getmatter.com/settings](https://web.getmatter.com/settings) → **Generate API
    Token**. Generating a token revokes any previous one, so reuse an existing token if
    another tool (such as `matter-cli`) already has it.
-2. `cp .env.example .env` and set `MATTER_API_TOKEN`.
+2. Create `.env` if you don't have one, make it readable only by you, then set
+   `MATTER_API_TOKEN` in it:
+
+   ```bash
+   [ -f .env ] || cp .env.example .env   # never overwrites an existing .env
+   chmod 600 .env
+   ls -l .env                             # should show -rw------- (mode 0600)
+   ```
+
+   Already have a `.env`? Just run `chmod 600 .env`. Copying `.env.example` over it would
+   replace your token with the placeholder. `cp` gives a new copy `.env.example`'s mode
+   (0644, readable by other local users), so the `chmod` is needed either way. `.env` is
+   Git-ignored; never commit it, and never paste the token into issues, tasks, logs or
+   chat.
 
 ## Development
 
@@ -108,8 +121,9 @@ settings and how to check the read connection can't change anything.
 
 ## Security
 
-Never commit tokens or personal library data. Tests use invented data only. The token is
-held by Arcade and injected per request; it is never exposed to the model.
+Never commit tokens or personal library data. Keep `.env` readable only by you
+(`chmod 600 .env`). Tests use invented data only. The token is held by Arcade and injected
+per request; it is never exposed to the model.
 
 Asking the model to confirm before a write is advice, not a safeguard. The safeguards are
 the read-only gateway and client-enforced approval for writes; see
