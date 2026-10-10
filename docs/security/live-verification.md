@@ -5,6 +5,10 @@ on the token owner's library, these checks confirm only the owner can reach the 
 that what runs is what was reviewed. Repeat them after changing gateways, project members
 or dependencies, and at least every few months.
 
+The dashboard checks in sections 1 and 2 are what limit who can act on the library. The
+script in section 3 only shows that some anonymous requests are refused; a passing run
+doesn't replace them.
+
 Record the results in the table at the end. Never record the Matter token, the worker
 secret, an Arcade API key or library contents.
 
@@ -21,8 +25,7 @@ In the Arcade dashboard:
 ## 2. Tool exposure
 
 - [ ] List every gateway in the project and the Matter tools each exposes. Check each
-      matches its purpose (a read-only gateway has only the read tools listed in
-      [gateways.md](gateways.md), if that setup is in use).
+      matches its purpose (a read-only gateway has only the tools tagged read-only).
 - [ ] Check for other ways to invoke the tools in the project (other gateways, API keys,
       agents or integrations using the project) and remove any you don't use.
 - [ ] Note which clients are connected to each gateway, and remove any you don't recognize.
@@ -43,11 +46,13 @@ it only on the throwaway local copy it starts to validate the server before uplo
       uv run scripts/check_unauthenticated_access.py https://<worker-url>
       ```
 
-      It asks for `/worker/tools`, `/worker/tools/invoke` and an MCP `tools/list` without
-      credentials, and passes only if each is refused. It never sends a token or calls a
-      tool. If the MCP check fails, the tool list is public but tool calls still go through
-      the worker routes; record it and ask Arcade whether the worker's `/mcp` route should
-      be reachable.
+      It first requires `/worker/health` to answer 200, so a typo or a gateway URL fails
+      instead of passing. It then asks for `/worker/tools`, `/worker/tools/invoke` and the
+      MCP route without credentials. It passes only if each is refused, and treats an MCP
+      route that accepts an anonymous `initialize` as exposed unless `tools/list` is
+      refused too. It never sends a token or calls a tool. Exit 0 means only that these
+      probes were refused, not that only you can call the tools. If the MCP check fails,
+      record it and ask Arcade whether the worker's `/mcp` route should be reachable.
 
 For reference, a local `uv run src/arcade_matter/server.py http` with
 `ARCADE_WORKER_SECRET` set refuses `/worker/tools` and `/worker/tools/invoke` (401), but
