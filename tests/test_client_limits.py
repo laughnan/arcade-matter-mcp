@@ -5,7 +5,7 @@ import json
 
 import httpx
 import pytest
-from arcade_mcp_server.exceptions import ToolExecutionError
+from arcade_mcp_server.exceptions import ToolExecutionError, UpstreamError
 from conftest import make_item
 
 from arcade_matter import client as client_module
@@ -18,6 +18,8 @@ LIMIT = 4_096
 @pytest.fixture(autouse=True)
 def small_limit(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(client_module, "MAX_RESPONSE_BYTES", LIMIT)
+    # Small raw reads, so overshoot past the limit is at most one 1 KB read.
+    monkeypatch.setattr(client_module, "READ_CHUNK_BYTES", 1024)
 
 
 class TrackedStream(httpx.AsyncByteStream):
@@ -103,26 +105,106 @@ async def test_understated_content_length_is_still_enforced(monkeypatch):
     assert stream.closed
 
 
-async def test_limit_applies_to_decompressed_bytes(monkeypatch):
-    compressed = gzip.compress(json.dumps({"pad": "x" * LIMIT * 4}).encode())
-    assert len(compressed) < LIMIT
+async def test_gzip_bomb_is_stopped_without_inflating_it(monkeypatch):
+    # 64 MB of zeros compresses to about 64 KB, well under the limit's Content-Length check.
+    # Sent as a real stream, so decompression happens inside the client.
+    compressed = gzip.compress(b"0" * (64 * 1024 * 1024))
+    assert len(compressed) < 1024 * 1024
+    monkeypatch.setattr(client_module, "MAX_RESPONSE_BYTES", 1024 * 1024)
+    stream = TrackedStream([compressed])
     serve(
         monkeypatch,
-        lambda r: httpx.Response(200, headers={"Content-Encoding": "gzip"}, content=compressed),
+        lambda r: httpx.Response(
+            200,
+            headers={"Content-Encoding": "gzip", "Content-Length": str(len(compressed))},
+            stream=stream,
+        ),
     )
+    inflated: list[int] = []
+    real = client_module.zlib.decompressobj
+
+    def tracking_decompressobj(*args):
+        decoder = real(*args)
+
+        class Tracked:
+            unconsumed_tail = b""
+
+            def decompress(self, data, max_length=0):
+                out = decoder.decompress(data, max_length)
+                self.unconsumed_tail = decoder.unconsumed_tail
+                inflated.append(len(out))
+                return out
+
+            def flush(self):
+                return decoder.flush()
+
+        return Tracked()
+
+    monkeypatch.setattr(client_module.zlib, "decompressobj", tracking_decompressobj)
 
     with pytest.raises(ToolExecutionError, match="larger than"):
         await MatterClient("t").get("/me")
 
+    assert sum(inflated) <= 1024 * 1024 + 1
+    assert max(inflated) <= 1024 * 1024 + 1
+    assert stream.closed
 
-async def test_compressed_normal_response_is_decoded(monkeypatch):
-    compressed = gzip.compress(json.dumps({"id": "act_1"}).encode())
+
+async def test_streamed_gzip_response_is_decoded(monkeypatch):
+    compressed = gzip.compress(json.dumps({"id": "act_1", "pad": "x" * 3000}).encode())
+    # Split the compressed body so it decodes across several reads.
+    chunks = [compressed[i : i + 100] for i in range(0, len(compressed), 100)]
     serve(
         monkeypatch,
-        lambda r: httpx.Response(200, headers={"Content-Encoding": "gzip"}, content=compressed),
+        lambda r: httpx.Response(
+            200, headers={"Content-Encoding": "gzip"}, stream=TrackedStream(chunks)
+        ),
     )
 
-    assert await MatterClient("t").get("/me") == {"id": "act_1"}
+    assert (await MatterClient("t").get("/me"))["id"] == "act_1"
+
+
+async def test_requests_identity_encoding(matter):
+    matter.add("GET", "/me", {"id": "act_1"})
+
+    await MatterClient("t").get("/me")
+
+    assert matter.last.headers["Accept-Encoding"] == "identity"
+
+
+async def test_corrupt_gzip_is_an_upstream_error(monkeypatch):
+    serve(
+        monkeypatch,
+        lambda r: httpx.Response(
+            200, headers={"Content-Encoding": "gzip"}, stream=TrackedStream([b"not gzip"])
+        ),
+    )
+
+    with pytest.raises(UpstreamError, match="unreadable"):
+        await MatterClient("t").get("/me")
+
+
+async def test_unknown_encoding_is_refused(monkeypatch):
+    serve(
+        monkeypatch,
+        lambda r: httpx.Response(
+            200, headers={"Content-Encoding": "br"}, stream=TrackedStream([b"x"])
+        ),
+    )
+
+    with pytest.raises(UpstreamError, match="unsupported encoding"):
+        await MatterClient("t").get("/me")
+
+
+async def test_single_huge_identity_chunk_is_read_in_bounded_steps(monkeypatch):
+    body = b"x" * (LIMIT * 64)
+    stream = TrackedStream([body])
+    serve(monkeypatch, lambda r: httpx.Response(200, stream=stream))
+
+    with pytest.raises(ToolExecutionError, match="larger than"):
+        await MatterClient("t").get("/me")
+
+    assert stream.closed
 
 
 async def test_oversized_error_is_not_retryable(monkeypatch):
@@ -137,7 +219,7 @@ async def test_oversized_error_is_not_retryable(monkeypatch):
 async def test_get_item_content_reports_oversized_article(matter, context):
     matter.add("GET", "/items/itm_1", make_item(markdown="x" * LIMIT * 2))
 
-    with pytest.raises(ToolExecutionError, match="open its URL instead"):
+    with pytest.raises(ToolExecutionError, match="open the item's URL instead"):
         await get_item_content(context, "itm_1", max_chars=1_000)
 
 

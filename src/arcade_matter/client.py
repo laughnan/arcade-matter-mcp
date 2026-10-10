@@ -5,6 +5,7 @@ Non-2xx responses are translated into Arcade errors with messages a model can ac
 """
 
 import asyncio
+import zlib
 from datetime import datetime, timezone
 from typing import Any, NoReturn
 
@@ -29,6 +30,8 @@ MAX_INLINE_RETRY_SECONDS = 5.0
 # bound what the model sees, not what the server buffers. 10 MiB fits a book-length
 # article's Markdown with room to spare.
 MAX_RESPONSE_BYTES = 10 * 1024 * 1024
+# Raw bytes read per step, so even an identity body overshoots the limit by at most this.
+READ_CHUNK_BYTES = 64 * 1024
 
 # Overridden in tests with an httpx.MockTransport; None means real network access.
 TRANSPORT: httpx.AsyncBaseTransport | None = None
@@ -40,6 +43,8 @@ class MatterClient:
             "Authorization": f"Bearer {token}",
             "Accept": "application/json",
             "User-Agent": "arcade-matter-mcp",
+            # Uncompressed bodies keep the size limit simple; compressed ones still work.
+            "Accept-Encoding": "identity",
         }
         # Status code and headers of the most recent response. Tools read these for things
         # the body doesn't carry: created vs existing (201/200) and rate-limit headroom.
@@ -155,39 +160,92 @@ async def _send_limited(client: httpx.AsyncClient, request: httpx.Request) -> ht
     Returns a fully read response. Raises ``ToolExecutionError`` as soon as the declared
     Content-Length or the bytes actually received pass the limit; the connection is closed
     either way.
+
+    The body is read raw, in chunks of at most ``READ_CHUNK_BYTES``, and decompressed here
+    with an output cap, so a small compressed body can't expand into a large allocation
+    before the limit is checked. httpx's own decoders don't cap their output.
     """
     response = await client.send(request, stream=True)
-    chunks: list[bytes] = []
+    body = bytearray()
     try:
         declared = response.headers.get("Content-Length", "")
         # Content-Length counts encoded bytes, so it can only prove a body is too big.
         if declared.isdigit() and int(declared) > MAX_RESPONSE_BYTES:
             _raise_too_large(request, response.status_code, f"Content-Length {declared}")
-        received = 0
-        async for chunk in response.aiter_bytes():
-            received += len(chunk)
-            if received > MAX_RESPONSE_BYTES:
-                _raise_too_large(request, response.status_code, f"over {received} bytes")
-            chunks.append(chunk)
+        decoder = _decoder_for(request, response)
+
+        def add(data: bytes) -> None:
+            body.extend(data)
+            if len(body) > MAX_RESPONSE_BYTES:
+                _raise_too_large(request, response.status_code, f"over {len(body)} bytes")
+
+        def feed(raw: bytes) -> None:
+            if decoder is None:
+                add(raw)
+                return
+            pending = raw
+            while pending:
+                # Never ask for more than one byte past the limit at a time.
+                add(decoder.decompress(pending, MAX_RESPONSE_BYTES - len(body) + 1))
+                pending = decoder.unconsumed_tail
+
+        try:
+            if response.is_stream_consumed:
+                # Already read into memory and decoded (a response built from bytes, as in
+                # tests), so there's nothing left to bound; just apply the limit.
+                add(response.content)
+            else:
+                async for raw in response.aiter_raw(chunk_size=READ_CHUNK_BYTES):
+                    feed(raw)
+                if decoder is not None:
+                    add(decoder.flush())
+        except zlib.error:
+            raise UpstreamError(
+                "Matter returned an unreadable response.",
+                developer_message=(
+                    f"Matter {request.method} {request.url.path} -> {response.status_code} "
+                    "with a body that failed to decompress"
+                ),
+                status_code=response.status_code,
+            ) from None
     finally:
         await response.aclose()
-    # The chunks are already decoded, so drop the headers that describe the encoded body.
+    # The body is already decoded, so drop the headers that describe the encoded body.
     headers = [
         (k, v)
         for k, v in response.headers.multi_items()
         if k.lower() not in ("content-encoding", "content-length", "transfer-encoding")
     ]
     return httpx.Response(
-        response.status_code, headers=headers, content=b"".join(chunks), request=request
+        response.status_code, headers=headers, content=bytes(body), request=request
+    )
+
+
+def _decoder_for(request: httpx.Request, response: httpx.Response) -> Any:
+    """A zlib decompressor for the response's Content-Encoding, or None for identity."""
+    encoding = response.headers.get("Content-Encoding", "").strip().lower()
+    if encoding in ("", "identity"):
+        return None
+    if encoding in ("gzip", "x-gzip", "deflate"):
+        # wbits 32 + MAX_WBITS accepts both gzip and zlib-wrapped deflate.
+        return zlib.decompressobj(32 + zlib.MAX_WBITS)
+    # We ask for identity, so any other encoding is unexpected; don't guess at it.
+    raise UpstreamError(
+        "Matter returned a response in an unsupported encoding.",
+        developer_message=(
+            f"Matter {request.method} {request.url.path} -> {response.status_code} "
+            f"with Content-Encoding {encoding!r}"
+        ),
+        status_code=response.status_code,
     )
 
 
 def _raise_too_large(request: httpx.Request, status: int, detail: str) -> NoReturn:
-    limit_mb = MAX_RESPONSE_BYTES // (1024 * 1024)
+    limit_mb = f"{MAX_RESPONSE_BYTES / (1024 * 1024):g}"
     # Not retryable: the same request would return the same oversized body.
     raise ToolExecutionError(
-        f"Matter's response was larger than {limit_mb} MB, so it wasn't loaded. For an "
-        "item's text, open its URL instead.",
+        f"Matter's response was larger than {limit_mb} MB, so it wasn't loaded. If this was "
+        "an item's full text, open the item's URL instead.",
         developer_message=(
             f"Matter {request.method} {request.url.path} -> {status}: response body "
             f"exceeds MAX_RESPONSE_BYTES={MAX_RESPONSE_BYTES} ({detail})"
