@@ -244,7 +244,7 @@ These are read-only, idempotent and non-destructive.
 
 | Tool | Endpoint | Behavior |
 |---|---|---|
-| `SaveItem` | `POST /items` | create, idempotent. `url` (http or https), `status` (`queue` default, or `archive`). Returns right away; the response says whether extraction is still processing and to check `GetItem` later. Matter answers 201 for a new save and 200 with the existing item, unchanged, when the URL is already saved; the tool reports `already_in_library` and, if the existing item's status differs from the one asked for, says to use `UpdateItem` |
+| `SaveItem` | `POST /items` | create, idempotent. `url` (a public http or https URL of at most 2,048 characters, without embedded credentials; local and private-network hosts are rejected, see [security/save-item-urls.md](security/save-item-urls.md)), `status` (`queue` default, or `archive`). Returns right away; the response says whether extraction is still processing and to check `GetItem` later. Matter answers 201 for a new save and 200 with the existing item, unchanged, when the URL is already saved; the tool reports `already_in_library` and, if the existing item's status differs from the one asked for, says to use `UpdateItem` |
 | `UpdateItem` | `PATCH /items/{id}` | update, idempotent. `status` (`queue` or `archive`), `favorite`, `progress_percent` (0 to 100, sent as Matter's 0.0 to 1.0). At least one field required |
 | `AddTag` | `POST /items/{id}/tags` | update, idempotent. Adds a tag by name (case-insensitive), creating it if needed |
 | `RemoveTag` | `DELETE /items/{id}/tags/{tag_id}` | update, idempotent. Removes a tag from one item; the tag itself is kept |

@@ -16,6 +16,8 @@ from arcade_matter.tools.items import MAX_URL_CHARS, check_save_url, save_item
         "https://93.184.215.14/article",
         "https://[2606:2800:21f:cb07:6820:80da:af6b:8b2c]/article",
         "https://cafe.example/menu",
+        "https://[64:ff9b::808:808]/article",
+        "https://myhome.arpa.example/article",
     ],
 )
 def test_accepts_public_urls(url):
@@ -62,6 +64,16 @@ def test_rejects_embedded_credentials(url):
         "http://[fd00::1]/",
         "http://[::ffff:127.0.0.1]/",
         "http://[::ffff:10.0.0.1]/",
+        "http://[::7f00:1]/",
+        "http://[::a00:1]/",
+        "http://[::ffff:0:127.0.0.1]/",
+        "http://[64:ff9b::7f00:1]/",
+        "http://[64:ff9b::c0a8:1]/",
+        "http://[64:ff9b:1::a00:1]/",
+        "http://[2002:7f00:1::]/",
+        "http://[2002:c0a8:101::1]/",
+        "http://[2001:0:4136:e378:8000:63bf:80ff:fffe]/",
+        "http://home.arpa/",
     ],
 )
 def test_rejects_local_and_private_hosts(url):

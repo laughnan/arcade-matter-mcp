@@ -31,10 +31,11 @@ That's a prompt, not a boundary: a manipulated model can ignore it.
 - anything other than `http://` and `https://`, and malformed hosts or ports;
 - URLs with embedded credentials (`https://user:pass@host/`);
 - loopback, private, link-local, carrier-grade NAT, multicast and unspecified IP
-  addresses, in IPv4, IPv6 and IPv4-mapped IPv6, including shorthand forms like
-  `127.1`, `2130706433` and `0x7f.0.0.1`;
-- `localhost`, single-label names (`intranet`) and the `.localhost`, `.local`,
-  `.internal`, `.lan` and `.home.arpa` suffixes;
+  addresses, in IPv4 and IPv6, including shorthand IPv4 forms like `127.1`,
+  `2130706433` and `0x7f.0.0.1`, and IPv6 forms that carry such an IPv4 address
+  (IPv4-mapped, IPv4-compatible, SIIT, NAT64, 6to4 and Teredo);
+- `localhost`, single-label names (`intranet`), `home.arpa`, and the `.localhost`,
+  `.local`, `.internal`, `.lan` and `.home.arpa` suffixes;
 - URLs longer than 2,048 characters.
 
 ## What the checks don't do

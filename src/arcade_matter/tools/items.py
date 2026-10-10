@@ -58,6 +58,12 @@ MAX_URL_CHARS = 2_048
 # Host names that only resolve inside a machine or private network.
 _LOCAL_HOSTS = ("localhost",)
 _LOCAL_SUFFIXES = (".localhost", ".local", ".internal", ".lan", ".home.arpa")
+# IPv6 prefixes whose last 32 bits carry an IPv4 address: IPv4-compatible (deprecated),
+# SIIT-translated, and the NAT64 well-known and local-use prefixes.
+_EMBEDDED_IPV4_PREFIXES = tuple(
+    ipaddress.IPv6Network(net)
+    for net in ("::/96", "::ffff:0:0:0/96", "64:ff9b::/96", "64:ff9b:1::/48")
+)
 
 
 @tool(requires_secrets=SECRETS, metadata=READ_ONLY)
@@ -295,11 +301,42 @@ def check_save_url(url: str) -> str:
 def _is_local_host(host: str) -> bool:
     address = _parse_ip(host)
     if address is not None:
-        if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
-            address = address.ipv4_mapped
-        return not address.is_global or address.is_multicast
-    # A single-label name ("intranet") only resolves on a local network.
-    return "." not in host or host in _LOCAL_HOSTS or host.endswith(_LOCAL_SUFFIXES)
+        if isinstance(address, ipaddress.IPv6Address):
+            embedded = _embedded_ipv4(address)
+            if embedded is not None and _is_non_global(embedded):
+                return True
+        return _is_non_global(address)
+    # A single-label name ("intranet") only resolves on a local network. RFC 8375 reserves
+    # "home.arpa" itself as well as the names under it.
+    return (
+        "." not in host
+        or host in _LOCAL_HOSTS
+        or host.endswith(_LOCAL_SUFFIXES)
+        or f".{host}" in _LOCAL_SUFFIXES
+    )
+
+
+def _is_non_global(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    return not address.is_global or address.is_multicast
+
+
+def _embedded_ipv4(address: ipaddress.IPv6Address) -> ipaddress.IPv4Address | None:
+    """The IPv4 address an IPv6 literal carries, if it's a translation or tunnel form.
+
+    Checked explicitly rather than trusting ``is_global``, which doesn't look inside these
+    forms and whose special-purpose lists vary between Python versions.
+    """
+    if address.ipv4_mapped is not None:
+        return address.ipv4_mapped
+    if address.sixtofour is not None:
+        return address.sixtofour
+    if address.teredo is not None:
+        return address.teredo[1]
+    if address in (ipaddress.IPv6Address("::"), ipaddress.IPv6Address("::1")):
+        return None
+    if any(address in net for net in _EMBEDDED_IPV4_PREFIXES):
+        return ipaddress.IPv4Address(int(address) & 0xFFFFFFFF)
+    return None
 
 
 def _parse_ip(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
