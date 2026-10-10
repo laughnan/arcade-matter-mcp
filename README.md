@@ -47,7 +47,9 @@ Phase 3 (summaries, read-only):
 | `Matter.SummarizeReadingTime` | Reading time totals, averages, streaks and busiest day for a period |
 
 Every tool is tagged read-only or write (and delete tools as destructive), so a gateway can
-expose only the read tools.
+expose only the read tools. The server can't enforce approval for writes itself, so use a
+read-only gateway day to day and a separate, approval-gated one for writes (see
+[Deploy](#deploy)).
 
 ## Setup
 
@@ -93,13 +95,25 @@ Rotate the token later without redeploying:
 arcade secret set MATTER_API_TOKEN=mat_...
 ```
 
-Then add the server's tools to an MCP Gateway in the Arcade dashboard (Arcade Auth mode)
-and connect a client, for example `arcade connect claude-code --gateway <slug>`.
+Then create two MCP Gateways in the Arcade dashboard, both in Arcade Auth mode:
+
+- a **read-only gateway** with only the read tools, for everyday use;
+- a **write-only gateway** with the write tools you want (and the delete tools only if you
+  need them), connected only through a client that asks you to approve every call to it.
+  That client also connects the read-only gateway to look up IDs.
+
+Connect a client with, for example, `arcade connect claude-code --gateway <slug>`. See
+[docs/security/gateways.md](docs/security/gateways.md) for the tool lists, client
+settings and how to check the read connection can't change anything.
 
 ## Security
 
 Never commit tokens or personal library data. Tests use invented data only. The token is
 held by Arcade and injected per request; it is never exposed to the model.
+
+Asking the model to confirm before a write is advice, not a safeguard. The safeguards are
+the read-only gateway and client-enforced approval for writes; see
+[docs/security/](docs/security/).
 
 ## License
 
